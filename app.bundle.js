@@ -22,6 +22,46 @@ var EvoraDonuts = (() => {
     { key: "setting",    label: "Pengaturan",   icon: "\u2699\uFE0F" },
   ];
 
+  // ─── Navigasi berkelompok (rapi): item tunggal + grup yang bisa dibuka ───
+  // Konten OwnerPage tetap pakai key yang sama — ini HANYA menata sidebar.
+  var OWNER_NAV = [
+    { key: "dashboard", label: "Beranda", icon: "\uD83C\uDFE0" },
+    { key: "kasir", label: "Kasir", icon: "\uD83D\uDED2" },
+    { group: "laporan", label: "Laporan", icon: "\uD83D\uDCCA", children: [
+      { key: "performaPeriode", label: "Kinerja", icon: "\uD83D\uDCC5" },
+      { key: "analisaProduk", label: "Produk terlaris", icon: "\uD83C\uDFC6" },
+      { key: "laporan", label: "Laporan harian", icon: "\uD83D\uDCC8" },
+      { key: "tutupBuku", label: "Tutup buku", icon: "\uD83D\uDCD5" },
+    ]},
+    { group: "keuangan", label: "Keuangan", icon: "\uD83D\uDCB5", children: [
+      { key: "setoran", label: "Setoran", icon: "\uD83D\uDCB0" },
+      { key: "shift", label: "Shift kas", icon: "\uD83D\uDD10" },
+      { key: "pengeluaran", label: "Biaya", icon: "\uD83E\uDDFE" },
+      { key: "pesanan", label: "Pesanan & reseller", icon: "\uD83D\uDCCB" },
+    ]},
+    { group: "stok", label: "Stok & Dapur", icon: "\uD83D\uDCE6", children: [
+      { key: "belanja", label: "Belanja bahan", icon: "\uD83D\uDED2" },
+      { key: "stokToping", label: "Stok toping", icon: "\uD83E\uDD53" },
+      { key: "produksiCK", label: "Dapur CK", icon: "\uD83C\uDF69" },
+    ]},
+    { key: "absensi", label: "Absen", icon: "\uD83D\uDD52" },
+    { key: "setting", label: "Pengaturan", icon: "\u2699\uFE0F" },
+  ];
+  var MANAGER_NAV = [
+    { key: "dashboard", label: "Beranda", icon: "\uD83C\uDFE0" },
+    { key: "kasir", label: "Kasir", icon: "\uD83D\uDED2" },
+    { group: "laporan", label: "Laporan", icon: "\uD83D\uDCCA", children: [
+      { key: "performaPeriode", label: "Kinerja", icon: "\uD83D\uDCC5" },
+      { key: "laporan", label: "Laporan harian", icon: "\uD83D\uDCC8" },
+    ]},
+    { group: "keuangan", label: "Keuangan", icon: "\uD83D\uDCB5", children: [
+      { key: "setoran", label: "Setoran", icon: "\uD83D\uDCB0" },
+      { key: "pengeluaran", label: "Biaya", icon: "\uD83E\uDDFE" },
+    ]},
+    { key: "produksiCK", label: "Dapur CK", icon: "\uD83C\uDF69" },
+    { key: "absensi", label: "Absen", icon: "\uD83D\uDD52" },
+  ];
+
   // ─── Patch rpc untuk delete-user via Vercel function ───────────────────────
   try {
     const __rpc = sb.rpc.bind(sb);
@@ -252,6 +292,60 @@ var EvoraDonuts = (() => {
 
   // ─── Formatters ────────────────────────────────────────────────────────────
   var fmtRp = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
+
+  // ─── Helper styling Excel (xlsx-js-style). Hasil tetap file .xlsx. ───────────
+  // Membuat header tebal + warna, border tipis semua sel, lebar kolom otomatis,
+  // dan format Rupiah untuk kolom yang namanya mengandung kata uang.
+  var XLSX_HEADER_FILL = "FF6B6B";   // coral (aksen Evora)
+  var _xlsxMoneyRe = /(rp|omzet|laba|modal|hpp|harga|jumlah|total|biaya|gaji|nilai|belanja|bagian|dp|setoran|bayar|pengeluaran|saldo|dibawa|jatah)/i;
+  var _colLetter = (n) => { let s = ""; n++; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+  // styleSheet(ws, { headerRows: berapa baris header di atas (default 1), money: paksa semua angka jadi Rupiah })
+  var styleSheet = (ws, opts) => {
+    try {
+      opts = opts || {};
+      if (!ws || !ws["!ref"] || typeof XLSX === "undefined" || !XLSX.utils) return ws;
+      const range = XLSX.utils.decode_range(ws["!ref"]);
+      const headerRows = opts.headerRows != null ? opts.headerRows : 1;
+      const border = { style: "thin", color: { rgb: "D9D2C7" } };
+      const allBorder = { top: border, bottom: border, left: border, right: border };
+      // lebar kolom otomatis berdasar isi terpanjang
+      const widths = [];
+      // deteksi kolom uang dari baris header terakhir
+      const moneyCols = {};
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const hCell = ws[XLSX.utils.encode_cell({ r: Math.max(0, headerRows - 1), c: C })];
+        const hv = hCell && hCell.v != null ? String(hCell.v) : "";
+        if (opts.money || _xlsxMoneyRe.test(hv)) moneyCols[C] = true;
+      }
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        let maxLen = 8;
+        for (let R = range.s.r; R <= range.e.r; R++) {
+          const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+          if (!cell) continue;
+          const isHeader = R < headerRows;
+          const isMoney = moneyCols[C] && !isHeader && typeof cell.v === "number";
+          // format angka uang
+          if (isMoney) cell.z = '#,##0';
+          // styling
+          cell.s = {
+            font: { bold: isHeader, color: { rgb: isHeader ? "FFFFFF" : "2B2118" }, sz: isHeader ? 11 : 10 },
+            fill: isHeader ? { patternType: "solid", fgColor: { rgb: XLSX_HEADER_FILL } } : undefined,
+            alignment: { horizontal: (typeof cell.v === "number") ? "right" : "left", vertical: "center", wrapText: false },
+            border: allBorder
+          };
+          const len = String(cell.v != null ? cell.v : "").length + (isMoney ? 4 : 0);
+          if (len > maxLen) maxLen = len;
+        }
+        widths.push({ wch: Math.min(maxLen + 2, 42) });
+      }
+      ws["!cols"] = widths;
+      // bekukan baris header supaya tetap terlihat saat scroll
+      if (headerRows > 0) ws["!freeze"] = { xSplit: 0, ySplit: headerRows };
+    } catch (e) { /* styling gagal tidak boleh membatalkan export */ }
+    return ws;
+  };
+  // Pembungkus praktis: json → sheet ber-style
+  var styledJsonSheet = (rows) => styleSheet(XLSX.utils.json_to_sheet(rows || []), { headerRows: 1 });
   var fmtSelisihKas = (n) => {
     const v = Number(n || 0);
     if (Math.abs(v) < 0.5) return { text: "Pas (0)", tone: "ok", value: 0 };
@@ -738,7 +832,7 @@ var EvoraDonuts = (() => {
           Omzet: r.omzet, "Modal (HPP)": r.hpp, "Laba Kotor": r.laba,
           "Margin %": r.omzet ? Math.round((r.laba / r.omzet) * 100) : 0,
         }));
-        const ws = XLSX.utils.json_to_sheet(rows);
+        const ws = styledJsonSheet(rows);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Analisa Produk");
         XLSX.writeFile(wb, "EvoraDonuts-AnalisaProduk-" + range.from + "_" + range.to + ".xlsx");
@@ -2123,7 +2217,7 @@ var EvoraDonuts = (() => {
       ["Sisa jatah (Rp)", jatah - belanjaTotal],
       []
     ];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ringkas), "Ringkasan");
+    XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(ringkas)), "Ringkasan");
 
     const perBahan = [["Bahan", "Saldo stok (yield)", "Pakai produksi", "Nilai HPP pakai", "Belanja Rp", "Belanja qty yield", "HPP batch master"]];
     bahan.forEach((b) => {
@@ -2135,19 +2229,19 @@ var EvoraDonuts = (() => {
       }
     });
     if (belanjaBy["__umum__"]) perBahan.push(["(Belanja tanpa tag bahan)", "", "", "", belanjaBy["__umum__"].rp, "", ""]);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(perBahan), "Per Bahan");
+    XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(perBahan)), "Per Bahan");
 
     const detBelanja = [["Tanggal", "Bahan", "Jumlah Rp", "Qty yield", "Keterangan", "Ada foto"]];
     ambilAll.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).forEach((p) => {
       detBelanja.push([p.date, p.bahanNama || "", p.jumlah || 0, p.qtyYield || "", p.keterangan || "", p.fotoUrl ? "ya" : ""]);
     });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detBelanja), "Detail Belanja");
+    XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(detBelanja)), "Detail Belanja");
 
     const detMutasi = [["Tanggal", "Bahan", "Tipe", "Qty", "Menu", "Catatan"]];
     ledger.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).forEach((e) => {
       detMutasi.push([e.date, e.bahanNama || "", e.tipe, e.tipe === "koreksi" ? e.qtySign : e.qty, e.menuNama || "", e.note || ""]);
     });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detMutasi), "Mutasi Stok");
+    XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(detMutasi)), "Mutasi Stok");
 
     XLSX.writeFile(wb, "gudang-belanja-" + bulan + ".xlsx");
     pushNotif && pushNotif("Excel gudang-belanja-" + bulan + ".xlsx diunduh.", "success");
@@ -2476,6 +2570,9 @@ function useConfirm() {
     const getList = () => (S.get("pengeluaranLapak") || []).filter((p) => p.branchId === branchId && p.date === date);
     const [list, setList] = useState(getList);
     const [form, setForm] = useState({ keterangan: "", jumlah: "" });
+    const [editId, setEditId] = useState(null);
+    const [editForm, setEditForm] = useState({ keterangan: "", jumlah: "" });
+    const [confirmAsk, confirmModal] = useConfirm();
     const refresh = () => setList(getList());
     const CHIPS = ["Kantong Plastik", "Ongkos kirim", "Transportasi", "Tisu", "Kemasan", "Lain-lain"];
 
@@ -2488,7 +2585,15 @@ function useConfirm() {
       pushNotif("Pengeluaran dicatat!", "success");
     };
 
-    const hapus = (id) => { S.set("pengeluaranLapak", (S.get("pengeluaranLapak") || []).filter((x) => x.id !== id)); refresh(); };
+    const mulaiEdit = (p) => { setEditId(p.id); setEditForm({ keterangan: p.keterangan, jumlah: String(p.jumlah) }); };
+    const simpanEdit = () => {
+      const jml = parseFloat(editForm.jumlah);
+      if (!editForm.keterangan || !jml || jml <= 0) { pushNotif("Isi keterangan & jumlah valid.", "warning"); return; }
+      S.set("pengeluaranLapak", (S.get("pengeluaranLapak") || []).map((x) => x.id === editId ? { ...x, keterangan: editForm.keterangan, jumlah: jml } : x));
+      setEditId(null); refresh(); pushNotif("Pengeluaran diperbarui.", "success");
+    };
+    const doHapus = (id) => { S.set("pengeluaranLapak", (S.get("pengeluaranLapak") || []).filter((x) => x.id !== id)); refresh(); pushNotif("Pengeluaran dihapus.", "warning"); };
+    const hapus = (p) => confirmAsk({ title: "Hapus Pengeluaran", message: `Hapus "${p.keterangan}" (${fmtRp(p.jumlah)})?`, danger: true, confirmLabel: "Hapus", onConfirm: () => doHapus(p.id) });
     const total = list.reduce((a, p) => a + p.jumlah, 0);
 
     return React.createElement("div", null,
@@ -2509,19 +2614,28 @@ function useConfirm() {
       list.length === 0 && React.createElement("p", { className: "empty-txt mt8" }, "Belum ada pengeluaran hari ini"),
       list.length > 0 && React.createElement("div", { className: "mt8" },
         list.map((p) =>
-          React.createElement("div", { key: p.id, className: "peng-row" },
-            React.createElement("div", { className: "peng-info" },
-              React.createElement("span", { className: "peng-ket" }, p.keterangan),
-              React.createElement("span", { className: "peng-ts" }, p.ts)
-            ),
-            React.createElement("div", { className: "peng-right" },
-              React.createElement("span", { className: "peng-jml" }, fmtRp(p.jumlah)),
-              React.createElement("button", { className: "btn-danger-sm", onClick: () => hapus(p.id) }, "X")
-            )
-          )
+          editId === p.id
+            ? React.createElement("div", { key: p.id, className: "peng-row", style: { flexWrap: "wrap", gap: 6 } },
+                React.createElement("input", { className: "inp inp-sm", style: { flex: 2, minWidth: 120 }, value: editForm.keterangan, onChange: (e) => setEditForm((f) => ({ ...f, keterangan: e.target.value })) }),
+                React.createElement("input", { className: "inp inp-sm", type: "number", style: { flex: 1, minWidth: 90 }, value: editForm.jumlah, onChange: (e) => setEditForm((f) => ({ ...f, jumlah: e.target.value })) }),
+                React.createElement("button", { className: "btn-primary btn-sm", onClick: simpanEdit }, "Simpan"),
+                React.createElement("button", { className: "btn-secondary btn-sm", onClick: () => setEditId(null) }, "Batal")
+              )
+            : React.createElement("div", { key: p.id, className: "peng-row" },
+                React.createElement("div", { className: "peng-info" },
+                  React.createElement("span", { className: "peng-ket" }, p.keterangan),
+                  React.createElement("span", { className: "peng-ts" }, p.ts)
+                ),
+                React.createElement("div", { className: "peng-right" },
+                  React.createElement("span", { className: "peng-jml" }, fmtRp(p.jumlah)),
+                  React.createElement("button", { className: "btn-secondary btn-sm", onClick: () => mulaiEdit(p), "aria-label": "Edit" }, "\u270F\uFE0F"),
+                  React.createElement("button", { className: "btn-danger-sm", onClick: () => hapus(p), "aria-label": "Hapus" }, "X")
+                )
+              )
         ),
         React.createElement("div", { className: "peng-total" }, "Total: ", React.createElement("strong", null, fmtRp(total)))
-      )
+      ),
+      confirmModal
     );
   }
 
@@ -5478,19 +5592,19 @@ function useConfirm() {
                   ["Transaksi", hasil.txCount || fTxs.length],
                   []
                 ];
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ring), "Ringkasan");
+                XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(ring)), "Ringkasan");
                 const cab = [["Cabang", "Tipe", "Penjualan", "HPP", "Biaya", "Laba", "Tx"]];
                 (hasil.branchStats || []).forEach((b) => {
                   cab.push([b.name, b.type || "", b.omzet || 0, b.modal || 0, b.peng || 0, b.laba || 0, b.txCount || 0]);
                 });
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cab), "PerCabang");
+                XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(cab)), "PerCabang");
                 const txRows = [["Tanggal", "Cabang", "Total", "HPP", "Item"]];
                 (fTxs || []).forEach((t) => {
                   const bname = (S.get("branches") || []).find((b) => b.id === t.branchId)?.name || t.branchId;
                   const items = (t.items || []).map((it) => it.nama + " x" + it.qty).join("; ");
                   txRows.push([t.date, bname, t.total || 0, t.totalHPP || 0, items]);
                 });
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(txRows), "Transaksi");
+                XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(txRows)), "Transaksi");
                 const pengRows = [["Tanggal", "Sumber", "Cabang", "Keterangan", "Jumlah", "Kategori"]];
                 (fPL || []).forEach((p) => {
                   const bname = (S.get("branches") || []).find((b) => b.id === p.branchId)?.name || p.branchId;
@@ -5500,7 +5614,7 @@ function useConfirm() {
                   const bname = p.branchId ? ((S.get("branches") || []).find((b) => b.id === p.branchId)?.name || p.branchId) : "Global";
                   pengRows.push([p.date, "Owner", bname, p.keterangan || "", p.jumlah || 0, p.kategori || ""]);
                 });
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pengRows), "Biaya");
+                XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(pengRows)), "Biaya");
                 const setRows = [["Tanggal", "Cabang", "Penjualan", "Biaya", "Tunai", "Non-tunai", "Selisih", "Status", "Catatan"]];
                 (S.get("setoranHarian") || []).filter((s) => s.date >= dr.from && s.date <= dr.to).forEach((s) => {
                   setRows.push([
@@ -5509,7 +5623,7 @@ function useConfirm() {
                     s.selisihKas != null ? s.selisihKas : "", s.status || "", s.catatanKas || ""
                   ]);
                 });
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(setRows), "Setoran");
+                XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(setRows)), "Setoran");
                 const alertRows = [
                   ["Snapshot perhatian"],
                   ["Gudang habis", gudangHabis.map((b) => b.nama).join(", ") || "-"],
@@ -5518,7 +5632,7 @@ function useConfirm() {
                   ["Setoran menunggu", setoranMenunggu.length],
                   ["Setoran selisih aktif", setoranSelisih.length]
                 ];
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(alertRows), "Perhatian");
+                XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(alertRows)), "Perhatian");
                 const fname = "laporan-" + dr.from + "_sd_" + dr.to + ".xlsx";
                 XLSX.writeFile(wb, fname);
                 pushNotif && pushNotif("Excel " + fname + " diunduh.", "success");
@@ -7695,11 +7809,19 @@ function useConfirm() {
     const saveB = () => {
       if (!nB.nama || !nB.hargaBeli || !nB.kapasitas) { pushNotif("Isi nama, harga beli, dan kapasitas!", "warning"); return; }
       const hppPerPcs = parseFloat(nB.hargaBeli) / Math.max(parseInt(nB.kapasitas), 1);
+      if (nB.editId) {
+        const u = bahan.map((x) => x.id === nB.editId ? { ...x, nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), kapasitas: parseInt(nB.kapasitas), satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || "pcs", hppPerPcs: roundHppRp(hppPerPcs) } : x);
+        S.set("bahanPokok", u); setBahan(u);
+        setNB({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" });
+        pushNotif("Bahan diperbarui! HPP menu yang memakainya ikut ter-update.", "success");
+        return;
+      }
       const u = [...bahan, { id: uid(), nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), kapasitas: parseInt(nB.kapasitas), satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || "pcs", hppPerPcs: roundHppRp(hppPerPcs) }];
       S.set("bahanPokok", u); setBahan(u);
       setNB({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" });
       pushNotif("Bahan ditambah!", "success");
     };
+    const editB = (b) => { setNB({ editId: b.id, nama: b.nama, hargaBeli: String(b.hargaBeli), kapasitas: String(b.kapasitas), satuanBeli: b.satuanBeli || "" }); };
 
     const delB = (id) => { const u = bahan.filter((x) => x.id !== id); S.set("bahanPokok", u); setBahan(u); pushNotif("Bahan dihapus.", "warning"); };
     const askDelB = (b) => confirmAsk({ title: "Hapus Bahan", message: `Yakin hapus "${b.nama}"?`, onConfirm: () => delB(b.id) });
@@ -7736,14 +7858,23 @@ function useConfirm() {
       const hargaBeli = parseFloat(nT.hargaBeli);
       // Harga per satuan stok (mis. Rp/gram) untuk menilai opname; kalau isiPerBeli kosong, biarkan null
       const hargaPerSatuan = isiPerBeli > 0 ? (hargaBeli / isiPerBeli) : null;
-      const u = [...topings, { id: uid(), nama: nT.nama, hargaBeli, kapasitas: parseInt(nT.kapasitas), hargaJual: parseFloat(nT.hargaJual), satuanStok: nT.satuanStok || "gram", isiPerBeli: isiPerBeli || null, hargaPerSatuan, jenis: nT.jenis || "topping", porsiPerPcs: nT.porsiPerPcs ? parseFloat(nT.porsiPerPcs) : null }];
+      const fields = { nama: nT.nama, hargaBeli, kapasitas: parseInt(nT.kapasitas), hargaJual: parseFloat(nT.hargaJual), satuanStok: nT.satuanStok || "gram", isiPerBeli: isiPerBeli || null, hargaPerSatuan, jenis: nT.jenis || "topping", porsiPerPcs: nT.porsiPerPcs ? parseFloat(nT.porsiPerPcs) : null };
+      if (nT.editId) {
+        const u = topings.map((x) => x.id === nT.editId ? { ...x, ...fields } : x);
+        S.set("topingTambahan", u); setTopings(u);
+        setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" });
+        pushNotif((fields.jenis === "glaze" ? "Glaze" : "Toping") + " diperbarui!", "success");
+        return;
+      }
+      const u = [...topings, { id: uid(), ...fields }];
       S.set("topingTambahan", u); setTopings(u);
       setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" });
       pushNotif((nT.jenis === "glaze" ? "Glaze" : "Toping") + " ditambah!", "success");
     };
 
     const delT = (id) => { const u = topings.filter((x) => x.id !== id); S.set("topingTambahan", u); setTopings(u); pushNotif("Toping dihapus.", "warning"); };
-    const askDelT = (t) => confirmAsk({ title: "Hapus Toping", message: `Yakin hapus "${t.nama}"?`, onConfirm: () => delT(t.id) });
+    const askDelT = (t) => confirmAsk({ title: "Hapus Toping", message: `Yakin hapus "${t.nama}"? Cek dulu apakah masih dipakai.`, onConfirm: () => delT(t.id) });
+    const editT = (t) => setNT({ editId: t.id, nama: t.nama, hargaBeli: String(t.hargaBeli), kapasitas: String(t.kapasitas), hargaJual: String(t.hargaJual), satuanStok: t.satuanStok || "gram", isiPerBeli: t.isiPerBeli != null ? String(t.isiPerBeli) : "", jenis: t.jenis || "topping", porsiPerPcs: t.porsiPerPcs != null ? String(t.porsiPerPcs) : "" });
 
     const SUB_TABS = ["bahan", "menu", "toping"];
     const SUB_LABEL = { bahan: "Bahan Pokok", menu: "Varian Menu", toping: "Topping" };
@@ -7774,13 +7905,13 @@ function useConfirm() {
                 React.createElement("td", null, fmtRp(b.hargaBeli)),
                 React.createElement("td", null, b.kapasitas, " pcs"),
                 React.createElement("td", { style: { color: "var(--accent)", fontWeight: 700 } }, fmtRp(roundHppRp(b.hargaBeli / Math.max(b.kapasitas, 1)))),
-                React.createElement("td", { className: "row-actions-cell" }, React.createElement(RowMenu, { actions: [{ label: "Hapus", danger: true, onClick: () => askDelB(b) }] }))
+                React.createElement("td", { className: "row-actions-cell" }, React.createElement(RowMenu, { actions: [{ label: "Edit", onClick: () => editB(b) }, { label: "Hapus", danger: true, onClick: () => askDelB(b) }] }))
               )
             )
           )
         ),
-        React.createElement("div", { className: "form-card mt8" },
-          React.createElement("h4", null, "Tambah Bahan Baku"),
+        React.createElement("div", { className: "form-card mt8", style: nB.editId ? { borderColor: "var(--accent)" } : null },
+          React.createElement("h4", null, nB.editId ? "\u270F\uFE0F Edit Bahan Baku" : "Tambah Bahan Baku"),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Nama Bahan & Ukuran Beli"),
             React.createElement("input", { className: "inp", placeholder: "Contoh: Tepung 1kg, Kentang 2kg", value: nB.nama, onChange: (e) => setNB((x) => ({ ...x, nama: e.target.value })) })
@@ -7796,7 +7927,10 @@ function useConfirm() {
           nB.hargaBeli && nB.kapasitas && React.createElement("div", { className: "hpp-preview" },
             "HPP per pcs = ", React.createElement("strong", null, fmtRp(roundHppRp(parseFloat(nB.hargaBeli || 0) / Math.max(parseInt(nB.kapasitas || 1), 1))))
           ),
-          React.createElement("button", { className: "btn-primary mt8", onClick: saveB }, "+ Tambah Bahan")
+          React.createElement("div", { className: "row-wrap mt8" },
+            React.createElement("button", { className: "btn-primary", onClick: saveB }, nB.editId ? "Simpan Perubahan" : "+ Tambah Bahan"),
+            nB.editId && React.createElement("button", { className: "btn-secondary", onClick: () => setNB({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" }) }, "Batal")
+          )
         )
       ),
 
@@ -7899,13 +8033,13 @@ function useConfirm() {
                 React.createElement("td", null, t.kapasitas, " pcs"),
                 React.createElement("td", { style: { color: "var(--accent)", fontWeight: 700 } }, fmtRp(roundHppRp((t.hargaBeli || 0) / Math.max(t.kapasitas || 1, 1)))),
                 React.createElement("td", null, fmtRp(t.hargaJual)),
-                React.createElement("td", { className: "row-actions-cell" }, React.createElement(RowMenu, { actions: [{ label: "Hapus", danger: true, onClick: () => askDelT(t) }] }))
+                React.createElement("td", { className: "row-actions-cell" }, React.createElement(RowMenu, { actions: [{ label: "Edit", onClick: () => editT(t) }, { label: "Hapus", danger: true, onClick: () => askDelT(t) }] }))
               )
             )
           )
         ),
-        React.createElement("div", { className: "form-card mt8" },
-          React.createElement("h4", null, "Tambah Toping / Glaze"),
+        React.createElement("div", { className: "form-card mt8", style: nT.editId ? { borderColor: "var(--accent)" } : null },
+          React.createElement("h4", null, nT.editId ? "\u270F\uFE0F Edit Toping / Glaze" : "Tambah Toping / Glaze"),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Jenis"),
             React.createElement("div", { className: "diskon-methods" },
@@ -7963,7 +8097,10 @@ function useConfirm() {
             "HPP/pcs = ", React.createElement("strong", null, fmtRp(roundHppRp(parseFloat(nT.hargaBeli || 0) / Math.max(parseInt(nT.kapasitas || 1), 1)))),
             " | Omzet Kotor = ", React.createElement("strong", { style: { color: "var(--green)" } }, fmtRp(Math.max(parseFloat(nT.hargaJual || 0) - roundHppRp(parseFloat(nT.hargaBeli || 0) / Math.max(parseInt(nT.kapasitas || 1), 1)), 0)))
           ),
-          React.createElement("button", { className: "btn-primary mt8", onClick: saveT }, nT.jenis === "glaze" ? "+ Tambah Glaze" : "+ Tambah Toping")
+          React.createElement("div", { className: "row-wrap mt8" },
+            React.createElement("button", { className: "btn-primary", onClick: saveT }, nT.editId ? "Simpan Perubahan" : (nT.jenis === "glaze" ? "+ Tambah Glaze" : "+ Tambah Toping")),
+            nT.editId && React.createElement("button", { className: "btn-secondary", onClick: () => setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" }) }, "Batal")
+          )
         )
       ),
       confirmModal
@@ -8126,6 +8263,7 @@ function useConfirm() {
     const [note, setNote] = useState("");
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [confirmAskGH, confirmModalGH] = useConfirm();
 
     useEffect(() => {
       setRate(String(getGajiHarianPadaTanggal(userId, today(), profile.gajiHarian) || profile.gajiHarian || ""));
@@ -8186,7 +8324,7 @@ function useConfirm() {
       }
     };
 
-    const hapusEntri = async (entryId) => {
+    const doHapusEntri = async (entryId) => {
       try {
         const map = { ...getGajiHistoriAll() };
         map[userId] = (map[userId] || []).filter((e) => e.id !== entryId);
@@ -8199,6 +8337,7 @@ function useConfirm() {
         pushNotif(e?.message || String(e), "warning");
       }
     };
+    const hapusEntri = (entry) => confirmAskGH({ title: "Hapus Histori Gaji", message: "Hapus entri gaji " + fmtRp(entry.gajiHarian || 0) + " (mulai " + (entry.dariTanggal || "?") + ")? Gaji aktif akan dihitung ulang.", danger: true, confirmLabel: "Hapus", onConfirm: () => doHapusEntri(entry.id) });
 
     return React.createElement("div", { style: { marginTop: 8, width: "100%" } },
       React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
@@ -8260,11 +8399,12 @@ function useConfirm() {
             ),
             React.createElement("button", {
               className: "btn-danger-sm",
-              onClick: () => hapusEntri(e.id)
+              onClick: () => hapusEntri(e)
             }, "X")
           )
         )
-      )
+      ),
+      confirmModalGH
     );
   }
 
@@ -8489,6 +8629,57 @@ function SettingAkun({ pushNotif }) {
     title: "Hapus Antrean",
     message: `Hapus antrean akun "${iv.email}"?`,
     onConfirm: () => deleteInvite(iv.id)
+  });
+
+  // Edit nama tampilan akun (tidak mengubah login/role)
+  const editNamaAkun = (p) => confirmAsk({
+    title: "Edit Nama Akun",
+    message: "Ubah nama tampilan untuk " + (p.email || p.user_id) + ":",
+    requireText: true,
+    textLabel: "Nama baru",
+    textPlaceholder: p.display_name || p.displayName || "",
+    confirmLabel: "Simpan",
+    onConfirm: async (nm) => {
+      const nama = String(nm || "").trim();
+      if (!nama) { pushNotif("Nama tidak boleh kosong.", "warning"); return; }
+      setActionBusy(p.user_id);
+      try {
+        const { error } = await sb.from("profiles").update({ display_name: nama }).eq("user_id", p.user_id);
+        if (error) throw error;
+        await S.loadKey("profiles");
+        pushNotif("Nama akun diperbarui.", "success");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); } finally { setActionBusy(null); }
+    }
+  });
+
+  // Reset password akun (owner) — via serverless /api/reset-password
+  const resetPasswordAkun = (p) => confirmAsk({
+    title: "Reset Password",
+    message: "Buat password baru untuk " + (p.display_name || p.email || p.user_id) + " (min. 6 karakter). Berikan password ini ke pekerja.",
+    requireText: true,
+    textLabel: "Password baru",
+    textPlaceholder: "min. 6 karakter",
+    confirmLabel: "Reset",
+    danger: false,
+    onConfirm: async (pw) => {
+      const pass = String(pw || "").trim();
+      if (pass.length < 6) { pushNotif("Password minimal 6 karakter.", "warning"); return; }
+      setActionBusy(p.user_id);
+      try {
+        const { data: sessData } = await sb.auth.getSession();
+        const token = sessData?.session?.access_token;
+        if (!token) throw new Error("Owner harus login dulu.");
+        const resp = await fetch("/api/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          body: JSON.stringify({ userId: p.user_id, password: pass })
+        });
+        const text = await resp.text();
+        let json = null; try { json = JSON.parse(text); } catch {}
+        if (!resp.ok) throw new Error(json?.error || text || "Gagal reset password.");
+        pushNotif("Password berhasil direset. Beri tahu pekerja password barunya.", "success");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); } finally { setActionBusy(null); }
+    }
   });
 
   const askArchiveAccount = (p) => confirmAsk({
@@ -8730,11 +8921,11 @@ function SettingAkun({ pushNotif }) {
           )
         ),
         p.role !== "owner" && React.createElement(RowMenu, {
-          actions: [{
-            label: actionBusy === p.user_id ? "Memproses..." : "Nonaktifkan Akun",
-            danger: true,
-            onClick: () => !actionBusy && askArchiveAccount(p)
-          }]
+          actions: [
+            { label: "Edit Nama", onClick: () => !actionBusy && editNamaAkun(p) },
+            { label: "Reset Password", onClick: () => !actionBusy && resetPasswordAkun(p) },
+            { label: actionBusy === p.user_id ? "Memproses..." : "Nonaktifkan Akun", danger: true, onClick: () => !actionBusy && askArchiveAccount(p) }
+          ]
         })
       )
     ),
@@ -8756,12 +8947,13 @@ function SettingAkun({ pushNotif }) {
     const del = (id) => { const u = investors.filter((x) => x.id !== id); S.set("investors", u); setInvestors(u); pushNotif("Investor dihapus.", "warning"); };
     const askDel = (inv) => confirmAsk({ title: "Hapus Investor", message: `Yakin hapus investor "${inv.nama}"?`, onConfirm: () => del(inv.id) });
     const upP = (id, p) => { const u = investors.map((x) => x.id === id ? { ...x, persenBagi: parseFloat(p) || 0 } : x); S.set("investors", u); setInvestors(u); };
+    const upNama = (id, nm) => { const u = investors.map((x) => x.id === id ? { ...x, nama: nm } : x); S.set("investors", u); setInvestors(u); };
 
     return React.createElement("div", null,
       React.createElement("h3", { className: "section-title mt8" }, "Kelola Investor"),
       investors.map((inv) =>
         React.createElement("div", { key: inv.id, className: "investor-row" },
-          React.createElement("strong", null, inv.nama),
+          React.createElement("input", { className: "inp inp-sm", value: inv.nama, onChange: (e) => upNama(inv.id, e.target.value), style: { flex: 1, minWidth: 100, fontWeight: 700 }, "aria-label": "Nama investor" }),
           React.createElement("div", { className: "row-wrap" },
             React.createElement("input", { className: "inp inp-sm", type: "number", value: inv.persenBagi, onChange: (e) => upP(inv.id, e.target.value), style: { width: 70 } }),
             React.createElement("span", null, "%"),
@@ -9341,16 +9533,16 @@ function SettingAkun({ pushNotif }) {
         ["Laba Bersih", current.laba_bersih],
         ["Jumlah Transaksi", current.tx_count],
       ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ringkasan), "Ringkasan");
+      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(ringkasan)), "Ringkasan");
 
-      if (d.perCabang) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.perCabang), "Per Cabang");
-      if (d.transaksi) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.transaksi.map((t) => ({
+      if (d.perCabang) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.perCabang), "Per Cabang");
+      if (d.transaksi) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.transaksi.map((t) => ({
         tanggal: t.date, branchId: t.branchId, total: t.total, totalHPP: t.totalHPP,
         items: (t.items || []).map((i) => i.nama + " x" + i.qty).join(", "),
       }))), "Transaksi");
-      if (d.pengeluaranLapak) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.pengeluaranLapak), "Pengeluaran Lapak");
-      if (d.pengeluaranOwner) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.pengeluaranOwner), "Pengeluaran Owner");
-      if (d.gajiPembayaran) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.gajiPembayaran), "Gaji");
+      if (d.pengeluaranLapak) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengeluaranLapak), "Pengeluaran Lapak");
+      if (d.pengeluaranOwner) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengeluaranOwner), "Pengeluaran Owner");
+      if (d.gajiPembayaran) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.gajiPembayaran), "Gaji");
 
       XLSX.writeFile(wb, `TutupBuku_${current.bulan}_v${current.versi}.xlsx`);
     };
@@ -9371,7 +9563,7 @@ function SettingAkun({ pushNotif }) {
         .map((c) => c.branchId);
 
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet([
         ["Investor", infoInvestor.investorNama],
         ["Bulan", current.bulan],
         ["Cabang", infoInvestor.cabang.join(", ")],
@@ -9380,10 +9572,10 @@ function SettingAkun({ pushNotif }) {
         ["HPP", infoInvestor.hpp],
         ["Biaya", infoInvestor.pengeluaran],
         ["Laba", infoInvestor.laba],
-      ]), "Ringkasan");
+      ])), "Ringkasan");
 
       const txMilikInvestor = (d.transaksi || []).filter((t) => cabangIds.includes(t.branchId));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(txMilikInvestor.map((t) => ({
+      XLSX.utils.book_append_sheet(wb, styledJsonSheet(txMilikInvestor.map((t) => ({
         tanggal: t.date, total: t.total, totalHPP: t.totalHPP,
         items: (t.items || []).map((i) => i.nama + " x" + i.qty).join(", "),
       }))), "Transaksi");
@@ -9712,11 +9904,11 @@ function SettingAkun({ pushNotif }) {
         ["Laba Bersih", current.laba_bersih],
         ["Jumlah Transaksi", current.tx_count],
       ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ringkasan), "Ringkasan");
+      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(ringkasan)), "Ringkasan");
 
-      if (d.perBulan) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.perBulan), "Per Bulan");
-      if (d.perCabang) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.perCabang), "Per Cabang");
-      if (d.perInvestor) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+      if (d.perBulan) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.perBulan), "Per Bulan");
+      if (d.perCabang) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.perCabang), "Per Cabang");
+      if (d.perInvestor) XLSX.utils.book_append_sheet(wb, styledJsonSheet(
         d.perInvestor.map((i) => ({ ...i, cabang: (i.cabang || []).join(", ") }))
       ), "Per Investor");
 
@@ -9734,7 +9926,7 @@ function SettingAkun({ pushNotif }) {
       if (!info) { pushNotif("Data investor ini tidak ditemukan di snapshot tahun ini.", "warning"); return; }
 
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet([
         ["Investor", info.investorNama],
         ["Tahun", current.tahun],
         ["Cabang", info.cabang.join(", ")],
@@ -9743,7 +9935,7 @@ function SettingAkun({ pushNotif }) {
         ["HPP", info.hpp],
         ["Biaya", info.pengeluaran],
         ["Laba", info.laba],
-      ]), "Ringkasan");
+      ])), "Ringkasan");
 
       XLSX.writeFile(wb, `Laporan_${info.investorNama}_Tahun${current.tahun}.xlsx`);
     };
@@ -9879,6 +10071,22 @@ function SettingAkun({ pushNotif }) {
       proceed();
     };
 
+    // Batalkan shift yang sedang terbuka (mis. salah input modal awal)
+    const batalShift = () => {
+      if (!shiftBuka) return;
+      confirmAsk({
+        title: "Batalkan Shift", danger: true, confirmLabel: "Batalkan",
+        message: "Batalkan shift yang sedang terbuka (modal awal " + fmtRp(shiftBuka.modalAwal) + ")? Catatan buka kas ini akan dihapus. Gunakan kalau modal awal salah input.",
+        onConfirm: async () => {
+          setBusy(true);
+          try {
+            await mutateLedger(loadShiftFromDb, (list) => list.filter((s) => s.id !== shiftBuka.id), saveShiftToDb);
+            pushNotif("Shift dibatalkan. Silakan buka kas ulang dengan angka benar.", "success");
+          } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
+        }
+      });
+    };
+
     const riwayat = getShiftList().filter((s) => s.branchId === selBranch && s.status === "tutup").sort((a, b) => (b.tutupTs || "").localeCompare(a.tutupTs || "")).slice(0, 30);
     const branchNama = (branches.find((b) => b.id === selBranch) || {}).name || "-";
 
@@ -9926,7 +10134,10 @@ function SettingAkun({ pushNotif }) {
               React.createElement("label", null, "Catatan selisih (opsional)"),
               React.createElement("input", { className: "inp", value: catatan, onChange: (e) => setCatatan(e.target.value), placeholder: "Contoh: kembalian kurang / salah hitung" })
             ),
-            React.createElement("button", { className: "btn-primary mt8", disabled: busy, onClick: tutupKas }, busy ? "..." : "\uD83D\uDD12 Tutup Kas & Akhiri Shift")
+            React.createElement("div", { className: "row-wrap mt8" },
+              React.createElement("button", { className: "btn-primary", disabled: busy, onClick: tutupKas }, busy ? "..." : "\uD83D\uDD12 Tutup Kas & Akhiri Shift"),
+              React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: batalShift }, "Batalkan (salah modal)")
+            )
           ),
 
       // ── Riwayat ──
@@ -10012,14 +10223,40 @@ function SettingAkun({ pushNotif }) {
       setBusy(true); try { await mutateLedger(loadPesananFromDb, (list) => list.filter((x) => x.id !== p.id), savePesananToDb); pushNotif("Dihapus.", "success"); } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
     } });
 
+    // Edit pesanan (isi / total / DP)
+    const [editId, setEditId] = useState(null);
+    const [ef, setEf] = useState({ isi: "", total: "", bayar: "lunas", dp: "" });
+    const mulaiEditPesanan = (p) => { setEditId(p.id); setEf({ isi: p.isi || "", total: String(p.total || ""), bayar: p.bayar || "lunas", dp: String(p.dp || "") }); };
+    const simpanEditPesanan = async () => {
+      const total = parseFloat(ef.total) || 0;
+      if (total <= 0) { pushNotif("Total harus lebih dari 0.", "warning"); return; }
+      const dp = ef.bayar === "dp" ? (parseFloat(ef.dp) || 0) : 0;
+      setBusy(true);
+      try {
+        await mutateLedger(loadPesananFromDb, (list) => list.map((x) => x.id === editId ? { ...x, isi: ef.isi, total, bayar: ef.bayar, dp } : x), savePesananToDb);
+        setEditId(null); pushNotif("Pesanan diperbarui.", "success");
+      } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
+    };
+
     // Reseller CRUD
     const [nr, setNr] = useState({ nama: "", hp: "", hargaGrosirNote: "" });
     const tambahReseller = async () => {
       if (!nr.nama.trim()) { pushNotif("Isi nama reseller.", "warning"); return; }
       setBusy(true);
-      try { const _r = { id: uid(), nama: nr.nama.trim(), hp: nr.hp.trim(), hargaGrosirNote: nr.hargaGrosirNote.trim() }; await mutateLedger(loadResellerFromDb, (list) => [...list, _r], saveResellerToDb); setNr({ nama: "", hp: "", hargaGrosirNote: "" }); pushNotif("Reseller ditambah.", "success"); }
+      try {
+        if (nr.editId) {
+          const eid = nr.editId;
+          await mutateLedger(loadResellerFromDb, (list) => list.map((x) => x.id === eid ? { ...x, nama: nr.nama.trim(), hp: nr.hp.trim(), hargaGrosirNote: nr.hargaGrosirNote.trim() } : x), saveResellerToDb);
+          setNr({ nama: "", hp: "", hargaGrosirNote: "" }); pushNotif("Reseller diperbarui.", "success");
+        } else {
+          const _r = { id: uid(), nama: nr.nama.trim(), hp: nr.hp.trim(), hargaGrosirNote: nr.hargaGrosirNote.trim() };
+          await mutateLedger(loadResellerFromDb, (list) => [...list, _r], saveResellerToDb);
+          setNr({ nama: "", hp: "", hargaGrosirNote: "" }); pushNotif("Reseller ditambah.", "success");
+        }
+      }
       catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
     };
+    const editReseller = (r) => setNr({ editId: r.id, nama: r.nama, hp: r.hp || "", hargaGrosirNote: r.hargaGrosirNote || "" });
     const hapusReseller = (r) => confirmAsk({ title: "Hapus Reseller", message: "Hapus " + r.nama + "?", danger: true, confirmLabel: "Hapus", onConfirm: async () => {
       setBusy(true); try { await mutateLedger(loadResellerFromDb, (list) => list.filter((x) => x.id !== r.id), saveResellerToDb); pushNotif("Dihapus.", "success"); } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
     } });
@@ -10108,7 +10345,23 @@ function SettingAkun({ pushNotif }) {
       subtab === "daftar" && React.createElement("div", null,
         pesananAll.length === 0
           ? React.createElement("p", { className: "info-txt" }, "Belum ada pesanan.")
-          : pesananAll.map((p) => React.createElement("div", { key: p.id, className: "form-card mt8" },
+          : pesananAll.map((p) => editId === p.id
+            ? React.createElement("div", { key: p.id, className: "form-card mt8", style: { borderColor: "var(--accent)" } },
+                React.createElement("h4", { style: { marginTop: 0 } }, "Edit: " + p.nama),
+                React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Isi pesanan"), React.createElement("input", { className: "inp", value: ef.isi, onChange: (e) => setEf((x) => ({ ...x, isi: e.target.value })) })),
+                React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Total (Rp)"), React.createElement("input", { className: "inp", type: "number", value: ef.total, onChange: (e) => setEf((x) => ({ ...x, total: e.target.value })) })),
+                React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Status bayar"),
+                  React.createElement("div", { className: "seg-row" },
+                    ["lunas", "dp", "utang"].map((b) => React.createElement("button", { key: b, type: "button", className: "seg-btn seg-sm" + (ef.bayar === b ? " seg-on-accent" : ""), onClick: () => setEf((x) => ({ ...x, bayar: b })) }, b === "lunas" ? "Lunas" : b === "dp" ? "DP" : "Belum bayar"))
+                  )
+                ),
+                ef.bayar === "dp" && React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Jumlah DP (Rp)"), React.createElement("input", { className: "inp", type: "number", value: ef.dp, onChange: (e) => setEf((x) => ({ ...x, dp: e.target.value })) })),
+                React.createElement("div", { className: "row-wrap mt8" },
+                  React.createElement("button", { className: "btn-primary btn-sm", disabled: busy, onClick: simpanEditPesanan }, "Simpan"),
+                  React.createElement("button", { className: "btn-secondary btn-sm", onClick: () => setEditId(null) }, "Batal")
+                )
+              )
+            : React.createElement("div", { key: p.id, className: "form-card mt8" },
               React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" } },
                 React.createElement("div", null,
                   React.createElement("strong", null, p.nama, " "),
@@ -10123,6 +10376,7 @@ function SettingAkun({ pushNotif }) {
               React.createElement("div", { className: "row-wrap mt8" },
                 sisaUtangPesanan(p) > 0 && React.createElement("button", { className: "btn-primary btn-sm", disabled: busy, onClick: () => bayarPesanan(p) }, "Lunasi " + fmtRp(sisaUtangPesanan(p))),
                 p.ambil === "belum" && React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => tandaiAmbil(p) }, "Tandai diambil"),
+                React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => mulaiEditPesanan(p) }, "\u270F\uFE0F Edit"),
                 React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => hapusPesanan(p) }, "Hapus")
               )
             ))
@@ -10130,12 +10384,15 @@ function SettingAkun({ pushNotif }) {
 
       // ── Reseller ──
       subtab === "reseller" && React.createElement("div", null,
-        React.createElement("div", { className: "form-card" },
-          React.createElement("h4", null, "Tambah Reseller"),
+        React.createElement("div", { className: "form-card", style: nr.editId ? { borderColor: "var(--accent)" } : null },
+          React.createElement("h4", null, nr.editId ? "\u270F\uFE0F Edit Reseller" : "Tambah Reseller"),
           React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Nama"), React.createElement("input", { className: "inp", value: nr.nama, onChange: (e) => setNr((x) => ({ ...x, nama: e.target.value })), placeholder: "Contoh: Bu Ani" })),
           React.createElement("div", { className: "field-group" }, React.createElement("label", null, "No. HP (opsional)"), React.createElement("input", { className: "inp", value: nr.hp, onChange: (e) => setNr((x) => ({ ...x, hp: e.target.value })), placeholder: "08xxx" })),
           React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Catatan harga grosir (opsional)"), React.createElement("input", { className: "inp", value: nr.hargaGrosirNote, onChange: (e) => setNr((x) => ({ ...x, hargaGrosirNote: e.target.value })), placeholder: "Contoh: donat Rp 2.500/pcs" })),
-          React.createElement("button", { className: "btn-primary mt8", disabled: busy, onClick: tambahReseller }, "+ Tambah Reseller")
+          React.createElement("div", { className: "row-wrap mt8" },
+            React.createElement("button", { className: "btn-primary", disabled: busy, onClick: tambahReseller }, nr.editId ? "Simpan Perubahan" : "+ Tambah Reseller"),
+            nr.editId && React.createElement("button", { className: "btn-secondary", onClick: () => setNr({ nama: "", hp: "", hargaGrosirNote: "" }) }, "Batal")
+          )
         ),
         resellers.length > 0 && React.createElement("div", { className: "mt8" },
           resellers.map((r) => React.createElement("div", { key: r.id, className: "row-wrap", style: { justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--border)" } },
@@ -10143,7 +10400,10 @@ function SettingAkun({ pushNotif }) {
               React.createElement("div", { style: { fontWeight: 700 } }, r.nama),
               React.createElement("div", { style: { fontSize: 11, color: "var(--text2)" } }, [r.hp, r.hargaGrosirNote].filter(Boolean).join(" \u00B7 ") || "\u2014")
             ),
-            React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => hapusReseller(r) }, "Hapus")
+            React.createElement("div", { className: "row-wrap", style: { gap: 6 } },
+              React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => editReseller(r) }, "\u270F\uFE0F Edit"),
+              React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => hapusReseller(r) }, "Hapus")
+            )
           ))
         )
       )
@@ -10447,8 +10707,23 @@ function SettingAkun({ pushNotif }) {
     const [subtab, setSubtab] = useState("opname"); // "opname" | "kirim" | "riwayat"
     const [selBranch, setSelBranch] = useState("");
     const [busy, setBusy] = useState(false);
+    const [confirmAskT, confirmModalT] = useConfirm();
     const branches = (S.get("branches") || []).filter((b) => b.tipe !== "central_kitchen");
     const topings = S.get("topingTambahan") || [];
+
+    // Batalkan 1 entri toping (kirim/opname keliru) — reload-fresh biar aman
+    const hapusEntriToping = (e) => confirmAskT({
+      title: "Batalkan Entri",
+      danger: true, confirmLabel: "Batalkan",
+      message: "Batalkan " + (e.tipe === "kirim" ? "kiriman" : "pemakaian") + " " + (e.topingNama || "toping") + " (" + e.qty + ")? Saldo akan menyesuaikan.",
+      onConfirm: async () => {
+        setBusy(true);
+        try {
+          await mutateLedger(loadStokTopingFromDb, (list) => list.filter((x) => x.id !== e.id), saveStokTopingToDb);
+          pushNotif("Entri dibatalkan. Saldo diperbarui.", "success");
+        } catch (err) { pushNotif("Gagal: " + (err?.message || err), "warning"); } finally { setBusy(false); }
+      }
+    });
 
     // default cabang pertama
     useEffect(() => { if (!selBranch && branches.length) setSelBranch(branches[0].id); }, [branches.length]);
@@ -10628,7 +10903,8 @@ function SettingAkun({ pushNotif }) {
                   React.createElement("th", { style: { textAlign: "left" } }, "Toping"),
                   React.createElement("th", { style: { textAlign: "left" } }, "Jenis"),
                   React.createElement("th", { style: { textAlign: "right" } }, "Qty"),
-                  React.createElement("th", { style: { textAlign: "right" } }, "Biaya")
+                  React.createElement("th", { style: { textAlign: "right" } }, "Biaya"),
+                  React.createElement("th", null, "")
                 )),
                 React.createElement("tbody", null,
                   riwayat.map((e) => React.createElement("tr", { key: e.id },
@@ -10638,11 +10914,13 @@ function SettingAkun({ pushNotif }) {
                       ? React.createElement("span", { style: { color: "var(--green)" } }, "\uD83D\uDE9A Kirim")
                       : React.createElement("span", { style: { color: "var(--yellow)" } }, "\uD83D\uDCCF Terpakai")),
                     React.createElement("td", { style: { textAlign: "right" } }, (e.tipe === "kirim" ? "+" : "-") + e.qty),
-                    React.createElement("td", { style: { textAlign: "right", color: "var(--accent)" } }, e.nilaiRp != null ? fmtRp(e.nilaiRp) : "-")
+                    React.createElement("td", { style: { textAlign: "right", color: "var(--accent)" } }, e.nilaiRp != null ? fmtRp(e.nilaiRp) : "-"),
+                    React.createElement("td", { style: { textAlign: "right" } }, React.createElement("button", { className: "btn-danger-sm", disabled: busy, onClick: () => hapusEntriToping(e), "aria-label": "Batalkan" }, "X"))
                   ))
                 )
               )
-            )
+            ),
+      confirmModalT
       )
     );
   }
@@ -10944,22 +11222,34 @@ function SettingAkun({ pushNotif }) {
 
   // ─── OwnerSetting ──────────────────────────────────────────────────────────
   function OwnerSetting({ stab, setStab, pushNotif, historyMode, onHistoryModeChange, hppFocus, setHppFocus }) {
-    const SETTING_TABS = [
-      { key: "hpp", label: "Menu & modal", icon: "\uD83C\uDF69" },
-      { key: "paket", label: "Isi box", icon: "\uD83D\uDCE6" },
-      { key: "cabang", label: "Cabang", icon: "\uD83C\uDFE2" },
-      { key: "akun", label: "Akun karyawan", icon: "\uD83D\uDC65" },
-      { key: "investor", label: "Investor", icon: "\uD83E\uDD1D" },
-      { key: "histori", label: "Input tanggal lama", icon: "\uD83D\uDDD3\uFE0F" },
-      { key: "branding", label: "Logo toko", icon: "\uD83C\uDFA8" },
-      { key: "stok", label: "Stok di toko", icon: "\uD83D\uDCE6" },
-      { key: "gudang", label: "Gudang", icon: "\uD83C\uDFEC" },
-      { key: "dana", label: "Dana cadangan", icon: "\uD83D\uDEE1\uFE0F" },
-      { key: "belanja", label: "Uang belanja", icon: "\uD83D\uDED2" },
-      { key: "aruskas", label: "Arus uang", icon: "\uD83D\uDCB8" },
-      { key: "diagnostik", label: "Cek sistem", icon: "\uD83D\uDD0D" },
-      { key: "data", label: "Hapus / kelola data", icon: "\uD83D\uDDC4\uFE0F" }
+    // Sub-pengaturan dikelompokkan jadi 4 kategori (lebih mudah dicari)
+    const SETTING_GROUPS = [
+      { label: "\uD83C\uDF69 Produk & Menu", items: [
+        { key: "hpp", label: "Menu & modal (HPP)", icon: "\uD83C\uDF69" },
+        { key: "paket", label: "Isi box", icon: "\uD83D\uDCE6" },
+        { key: "stok", label: "Stok di toko", icon: "\uD83D\uDCE6" },
+      ]},
+      { label: "\uD83C\uDFE2 Bisnis", items: [
+        { key: "cabang", label: "Cabang", icon: "\uD83C\uDFE2" },
+        { key: "investor", label: "Investor", icon: "\uD83E\uDD1D" },
+        { key: "branding", label: "Logo toko", icon: "\uD83C\uDFA8" },
+      ]},
+      { label: "\uD83D\uDC65 Tim", items: [
+        { key: "akun", label: "Akun karyawan", icon: "\uD83D\uDC65" },
+      ]},
+      { label: "\uD83D\uDCB0 Keuangan & Gudang", items: [
+        { key: "gudang", label: "Gudang bahan", icon: "\uD83C\uDFEC" },
+        { key: "belanja", label: "Uang belanja", icon: "\uD83D\uDED2" },
+        { key: "dana", label: "Dana cadangan", icon: "\uD83D\uDEE1\uFE0F" },
+        { key: "aruskas", label: "Arus uang", icon: "\uD83D\uDCB8" },
+      ]},
+      { label: "\uD83D\uDD27 Sistem", items: [
+        { key: "histori", label: "Input tanggal lama", icon: "\uD83D\uDDD3\uFE0F" },
+        { key: "diagnostik", label: "Cek sistem", icon: "\uD83D\uDD0D" },
+        { key: "data", label: "Hapus / kelola data", icon: "\uD83D\uDDC4\uFE0F" },
+      ]},
     ];
+    const SETTING_TABS = SETTING_GROUPS.flatMap((g) => g.items);
     const current = SETTING_TABS.find((t) => t.key === stab) || SETTING_TABS[0];
     return React.createElement("div", null,
       React.createElement("div", { className: "setting-switcher" },
@@ -10968,7 +11258,9 @@ function SettingAkun({ pushNotif }) {
           value: stab,
           onChange: (e) => setStab(e.target.value)
         },
-          SETTING_TABS.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.icon + "  " + t.label))
+          SETTING_GROUPS.map((g) => React.createElement("optgroup", { key: g.label, label: g.label },
+            g.items.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.icon + "  " + t.label))
+          ))
         ),
         React.createElement("span", { className: "setting-switcher-current" }, current.icon, " ", current.label)
       ),
@@ -11666,7 +11958,7 @@ function SettingAkun({ pushNotif }) {
         ["Catatan: ini kontrol operasional, bukan laporan arus kas PSAK."],
         ["Penjualan di app bisa beda dari kas masuk jika ada selisih setoran / timing."]
       ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "ArusKas");
+      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(rows)), "ArusKas");
       XLSX.writeFile(wb, "arus-kas-ops-" + bulan + ".xlsx");
       pushNotif("Excel arus kas diunduh.", "success");
     };
@@ -11808,10 +12100,10 @@ function SettingAkun({ pushNotif }) {
             rows.push([]);
             rows.push(["Menu tanpa resep", menusTanpaResep.length ? menusTanpaResep.map((m) => m.nama).join(", ") : "(tidak ada)"]);
             rows.push(["Bahan habis/minus", gudangHabis.length ? gudangHabis.map((b) => b.nama).join(", ") : "(tidak ada)"]);
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "SiapJual");
+            XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(rows)), "SiapJual");
             const tech = [["Cek teknis", "Status", "Perbaikan"]];
             checks.forEach((ch) => tech.push([ch.label, ch.ok ? "OK" : "BELUM", ch.ok ? "" : ch.fix]));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tech), "Teknis");
+            XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(tech)), "Teknis");
             XLSX.writeFile(wb, "checklist-siap-jual-" + today() + ".xlsx");
             pushNotif("Excel checklist-siap-jual-" + today() + ".xlsx diunduh.", "success");
           }
@@ -12448,6 +12740,7 @@ function SettingAkun({ pushNotif }) {
     const tick = useStoreTick();
     const [subtab, setSubtab] = useState("antar"); // antar | ambil | setor
     const [busy, setBusy] = useState(false);
+    const [confirmAskKurir, confirmModalKurir] = useConfirm();
     const namaSaya = me?.display_name || me?.displayName || me?.email || "Kurir";
     const tgl = today();
     const branches = (S.get("branches") || []).filter((b) => b.type !== "central_kitchen");
@@ -12513,6 +12806,29 @@ function SettingAkun({ pushNotif }) {
       } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
     };
 
+    // Koreksi/hapus catatan uang kurir yang BELUM diserahkan ke owner (statusUang "dibawa")
+    const koreksiUang = (rec) => {
+      const v = prompt("Perbaiki jumlah uang dari " + rec.branchNama + " (Rp):", String(rec.uangDibawa));
+      if (v === null) return;
+      const num = parseFloat(v);
+      if (!Number.isFinite(num) || num < 0) { pushNotif("Jumlah tidak valid.", "warning"); return; }
+      setBusy(true);
+      mutateLedger(loadKurirFromDb, (list) => list.map((k) => k.id === rec.id ? { ...k, uangDibawa: num } : k), saveKurirToDb)
+        .then(() => pushNotif("Jumlah uang diperbaiki jadi " + fmtRp(num) + ".", "success"))
+        .catch((e) => pushNotif("Gagal: " + (e?.message || e), "warning"))
+        .finally(() => setBusy(false));
+    };
+    const hapusUang = (rec) => {
+      confirmAskKurir({ title: "Hapus Catatan Uang", danger: true, confirmLabel: "Hapus",
+        message: "Hapus catatan uang " + fmtRp(rec.uangDibawa) + " dari " + rec.branchNama + "? (kalau salah catat)",
+        onConfirm: async () => {
+          setBusy(true);
+          try { await mutateLedger(loadKurirFromDb, (list) => list.filter((k) => k.id !== rec.id), saveKurirToDb); pushNotif("Catatan dihapus.", "success"); }
+          catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
+        }
+      });
+    };
+
     // ── Setor ke owner: kirim (status → perjalanan). Owner yang konfirmasi jadi selesai. ──
     const dibawa = getKurirList().filter((k) => k.statusUang === "dibawa");
     const perjalanan = getKurirList().filter((k) => k.statusUang === "perjalanan");
@@ -12528,7 +12844,8 @@ function SettingAkun({ pushNotif }) {
       } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
     };
 
-    return React.createElement("div", { className: "page" },
+     return React.createElement("div", { className: "page" },
+      confirmModalKurir,
       React.createElement("div", { className: "page-header" },
         React.createElement("img", { className: "page-icon", src: getBrandLogo(), style: { width: 45, height: 45, objectFit: "cover", borderRadius: 10 } }),
         React.createElement("div", null,
@@ -12589,7 +12906,12 @@ function SettingAkun({ pushNotif }) {
                 React.createElement("strong", null, b.name),
                 React.createElement("div", { style: { fontSize: 11, color: "var(--text2)" } }, tutup ? "\u2713 sudah tutup toko" : "\u23F3 belum tutup")
               ),
-              done && React.createElement("span", { className: "pill-badge", style: { color: "var(--green)", borderColor: "var(--green)" } }, "\u2713 " + fmtRp(done.uangDibawa))
+              done && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+                React.createElement("span", { className: "pill-badge", style: { color: "var(--green)", borderColor: "var(--green)" } }, "\u2713 " + fmtRp(done.uangDibawa)),
+                done.statusUang === "dibawa" && React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: () => koreksiUang(done), "aria-label": "Koreksi" }, "\u270F\uFE0F"),
+                done.statusUang === "dibawa" && React.createElement("button", { className: "btn-danger-sm", disabled: busy, onClick: () => hapusUang(done), "aria-label": "Hapus" }, "X"),
+                done.statusUang !== "dibawa" && React.createElement("span", { style: { fontSize: 10.5, color: "var(--text2)" } }, done.statusUang === "perjalanan" ? "menuju owner" : "selesai")
+              )
             ),
             !done && tutup && React.createElement("div", { className: "row-wrap mt8", style: { alignItems: "center", gap: 8 } },
               React.createElement("input", { className: "inp inp-sm", type: "number", inputMode: "numeric", style: { flex: 1, minWidth: 120 }, value: uangForm[b.id] == null ? "" : uangForm[b.id], onChange: (e) => setUang(b.id, e.target.value), placeholder: "Uang dibawa (Rp)" }),
@@ -13038,6 +13360,7 @@ function SettingAkun({ pushNotif }) {
     const [historyMode, setHistoryMode] = useState(() => getHistoryModeLocal());
     const [ownerTab, setOwnerTab] = useState("dashboard");
     const [navOpen, setNavOpen] = useState(false);
+    const [openGroup, setOpenGroup] = useState(null); // grup sidebar yang sedang terbuka
     const [theme, setTheme] = useState(() => {
   try { return localStorage.getItem("evora_theme") || "dark"; } catch { return "dark"; }
 });
@@ -13141,12 +13464,18 @@ if (!sb) {
     const isOwner = profile?.role === "owner";
     const isManager = isAreaManager(profile);
     const isStaffAdminNav = isOwner || isManager;
-    const navTabs = isOwner ? OWNER_TABS : isManager ? MANAGER_TABS : [];
+    const navGroups = isOwner ? OWNER_NAV : isManager ? MANAGER_NAV : [];
     useEffect(() => {
       if (!isManager) return;
       const allowed = new Set(MANAGER_TABS.map((t) => t.key));
       if (!allowed.has(ownerTab)) setOwnerTab("dashboard");
     }, [isManager, ownerTab]);
+    // buka otomatis grup yang berisi tab aktif (biar user tahu posisinya)
+    useEffect(() => {
+      for (const it of navGroups) {
+        if (it.children && it.children.some((c) => c.key === ownerTab)) { setOpenGroup(it.group); break; }
+      }
+    }, [ownerTab, isOwner, isManager]);
 
     const closeNav = () => setNavOpen(false);
 
@@ -13173,14 +13502,42 @@ if (!sb) {
               ),
               React.createElement("div", { className: "sidebar-role" }, roleLabel),
               isStaffAdminNav && React.createElement("div", { className: "sidebar-nav" },
-                navTabs.map((t) => React.createElement("button", {
-                  key: t.key,
-                  className: "sidebar-link" + (ownerTab === t.key ? " active" : ""),
-                  onClick: () => { setOwnerTab(t.key); closeNav(); }
-                },
-                  React.createElement("span", { className: "sidebar-link-icon" }, t.icon),
-                  React.createElement("span", null, t.label)
-                ))
+                navGroups.map((it) => {
+                  // Item tunggal (bukan grup)
+                  if (!it.children) {
+                    return React.createElement("button", {
+                      key: it.key,
+                      className: "sidebar-link" + (ownerTab === it.key ? " active" : ""),
+                      onClick: () => { setOwnerTab(it.key); closeNav(); }
+                    },
+                      React.createElement("span", { className: "sidebar-link-icon" }, it.icon),
+                      React.createElement("span", null, it.label)
+                    );
+                  }
+                  // Grup yang bisa dibuka/tutup
+                  const isOpen = openGroup === it.group;
+                  const activeInGroup = it.children.some((c) => c.key === ownerTab);
+                  return React.createElement("div", { key: it.group, className: "sidebar-group" },
+                    React.createElement("button", {
+                      className: "sidebar-link sidebar-group-head" + (activeInGroup && !isOpen ? " has-active" : ""),
+                      onClick: () => setOpenGroup(isOpen ? null : it.group)
+                    },
+                      React.createElement("span", { className: "sidebar-link-icon" }, it.icon),
+                      React.createElement("span", { style: { flex: 1, textAlign: "left" } }, it.label),
+                      React.createElement("span", { className: "sidebar-group-chev" }, isOpen ? "\u25B4" : "\u25BE")
+                    ),
+                    isOpen && React.createElement("div", { className: "sidebar-subnav" },
+                      it.children.map((c) => React.createElement("button", {
+                        key: c.key,
+                        className: "sidebar-link sidebar-sublink" + (ownerTab === c.key ? " active" : ""),
+                        onClick: () => { setOwnerTab(c.key); closeNav(); }
+                      },
+                        React.createElement("span", { className: "sidebar-link-icon" }, c.icon),
+                        React.createElement("span", null, c.label)
+                      ))
+                    )
+                  );
+                })
               ),
               React.createElement("div", { className: "sidebar-spacer" }),
               React.createElement("button", { className: "sidebar-theme", onClick: () => setTheme((t) => t === "dark" ? "light" : "dark") },

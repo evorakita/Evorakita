@@ -110,6 +110,13 @@ body{
 .sidebar-link:hover{background:var(--bg3);color:var(--text);}
 .sidebar-link.active{background:var(--accent);color:var(--accent-ink);box-shadow:var(--shadow-sm);}
 .sidebar-link.active:hover{background:var(--accent);}
+/* ── Sidebar berkelompok ── */
+.sidebar-group{display:flex;flex-direction:column;}
+.sidebar-group-head.has-active{color:var(--accent);}
+.sidebar-group-chev{font-size:11px;opacity:.7;flex-shrink:0;}
+.sidebar-subnav{display:flex;flex-direction:column;gap:2px;margin:2px 0 4px 0;padding-left:10px;border-left:2px solid var(--border);margin-left:12px;}
+.sidebar-sublink{font-size:13px;font-weight:500;padding:9px 12px;}
+.sidebar-sublink .sidebar-link-icon{font-size:14px;width:18px;}
 .sidebar-spacer{flex:1;}
 .sidebar-theme,.sidebar-logout{
   background:var(--bg3);border:1px solid var(--border);color:var(--text2);
