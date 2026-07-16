@@ -1,0 +1,25 @@
+{
+  "name": "Evora Donuts",
+  "short_name": "Evora Donuts",
+  "description": "Aplikasi operasional Evora Donuts — kasir, setoran, stok, gaji, dan laporan multi-cabang.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": [
+    {
+      "src": "./logo-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./logo-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
