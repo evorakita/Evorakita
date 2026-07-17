@@ -346,6 +346,41 @@ var EvoraDonuts = (() => {
   };
   // Pembungkus praktis: json → sheet ber-style
   var styledJsonSheet = (rows) => styleSheet(XLSX.utils.json_to_sheet(rows || []), { headerRows: 1 });
+
+  // Sheet ringkasan vertikal yang lebih rapi di Excel mobile/desktop.
+  // Format angka uang ditulis sebagai angka dengan format Rupiah, bukan teks.
+  var styledSummarySheet = (rows, moneyRows = []) => {
+    const ws = XLSX.utils.aoa_to_sheet(rows || []);
+    try {
+      if (!ws || !ws["!ref"]) return ws;
+      const range = XLSX.utils.decode_range(ws["!ref"]);
+      const money = new Set(moneyRows || []);
+      ws["!cols"] = [{ wch: 48 }, { wch: 24 }];
+      ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }];
+      for (let R = range.s.r; R <= range.e.r; R++) {
+        const a = ws[XLSX.utils.encode_cell({ r: R, c: 0 })];
+        const b = ws[XLSX.utils.encode_cell({ r: R, c: 1 })];
+        if (a) a.s = {
+          font: { bold: R === 0 || R === 4 || R === 9, color: { rgb: R === 0 ? "FFFFFF" : "2B2118" }, sz: R === 0 ? 14 : 11 },
+          fill: R === 0 ? { patternType: "solid", fgColor: { rgb: "FF6B6B" } } : undefined,
+          alignment: { vertical: "center", wrapText: true },
+          border: { bottom: { style: "thin", color: { rgb: "E5DED5" } } }
+        };
+        if (b) {
+          b.s = {
+            font: { bold: R === 0 || R === 4 || R === 9, color: { rgb: R === 0 ? "FFFFFF" : "2B2118" }, sz: R === 0 ? 14 : 11 },
+            fill: R === 0 ? { patternType: "solid", fgColor: { rgb: "FF6B6B" } } : undefined,
+            alignment: { horizontal: "right", vertical: "center" },
+            border: { bottom: { style: "thin", color: { rgb: "E5DED5" } } }
+          };
+          if (money.has(R) && typeof b.v === "number") b.z = '"Rp" #,##0;[Red]("Rp" #,##0)';
+        }
+      }
+      ws["!rows"] = [{ hpt: 26 }];
+      ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+    } catch (e) { /* export tetap berjalan jika styling tidak didukung */ }
+    return ws;
+  };
   var fmtSelisihKas = (n) => {
     const v = Number(n || 0);
     if (Math.abs(v) < 0.5) return { text: "Pas (0)", tone: "ok", value: 0 };
@@ -9289,20 +9324,31 @@ function SettingAkun({ pushNotif }) {
       const from = bulan + "-01";
       const to = nextMonthStr(bulan);
 
-      const [txRes, plRes, poRes, distRes, gajiRes] = await Promise.all([
-        sb.from("transactions").select("branchId, total, totalHPP, items, date").gte("date", from).lt("date", to),
-        sb.from("pengeluaranLapak").select("branchId, jumlah, keterangan, date").gte("date", from).lt("date", to),
-        sb.from("pengeluaranOwner").select("branchId, jumlah, keterangan, kategori, date").gte("date", from).lt("date", to),
-        sb.from("distribusiCK").select("branchId, hppTotal, jumlahKirim, date").gte("date", from).lt("date", to),
-        sb.from("gajiPembayaran").select("branchId, jumlah, bulan").eq("bulan", bulan),
+      // Audit snapshot mengambil data mentah lebih lengkap, bukan hanya KPI.
+      const [txRes, plRes, poRes, distRes, gajiRes, setoranRes, produksiRes, wasteRes, absensiRes, belanjaRes] = await Promise.all([
+        sb.from("transactions").select("*").gte("date", from).lt("date", to),
+        sb.from("pengeluaranLapak").select("*").gte("date", from).lt("date", to),
+        sb.from("pengeluaranOwner").select("*").gte("date", from).lt("date", to),
+        sb.from("distribusiCK").select("*").gte("date", from).lt("date", to),
+        sb.from("gajiPembayaran").select("*").eq("bulan", bulan),
+        sb.from("setoranHarian").select("*").gte("date", from).lt("date", to),
+        sb.from("produksiCK").select("*").gte("date", from).lt("date", to),
+        sb.from("stokTidakTerjual").select("*").gte("date", from).lt("date", to),
+        sb.from("absensi").select("*").gte("date", from).lt("date", to),
+        sb.from("pengambilanBelanja").select("*").gte("date", from).lt("date", to),
       ]);
-      for (const r of [txRes, plRes, poRes, distRes, gajiRes]) if (r.error) throw r.error;
+      for (const r of [txRes, plRes, poRes, distRes, gajiRes, setoranRes, produksiRes, wasteRes, absensiRes, belanjaRes]) if (r.error) throw r.error;
 
       const txs = txRes.data || [];
       const pl = plRes.data || [];
       const po = poRes.data || [];
       const dist = distRes.data || [];
       const gaji = gajiRes.data || [];
+      const setoran = setoranRes.data || [];
+      const produksi = produksiRes.data || [];
+      const waste = wasteRes.data || [];
+      const absensi = absensiRes.data || [];
+      const belanja = belanjaRes.data || [];
       const gajiTotal = gaji.reduce((a, g) => a + (g.jumlah || 0), 0); // info status bayar saja, bukan komponen laba
 
       const investorsAll = S.get("investors") || [];
@@ -9396,6 +9442,15 @@ function SettingAkun({ pushNotif }) {
           pengeluaranOwner: po,
           distribusiCK: dist,
           gajiPembayaran: gaji,
+          setoranHarian: setoran,
+          produksiCK: produksi,
+          stokTidakTerjual: waste,
+          absensi,
+          pengambilanBelanja: belanja,
+          masterCabang: branches,
+          masterMenu: S.get("menuVarian") || [],
+          masterBahan: S.get("bahanPokok") || [],
+          masterToping: S.get("topingTambahan") || [],
         },
       };
     };
@@ -9521,19 +9576,20 @@ function SettingAkun({ pushNotif }) {
       const wb = XLSX.utils.book_new();
 
       const ringkasan = [
+        ["EVORA DONUTS — TUTUP BUKU", null],
         ["Bulan", current.bulan],
         ["Versi", current.versi],
         ["Ditutup pada", current.closed_at],
-        [],
+        ["", null],
         ["Penjualan", current.omzet],
         ["HPP", current.hpp],
         ["Pengeluaran Lapak", current.pengeluaran_lapak],
         ["Pengeluaran Owner", current.pengeluaran_owner],
-        ["Gaji (info status bayar — sudah termasuk di Pengeluaran Owner, bukan biaya tambahan)", current.gaji_total],
+        ["Gaji (informasi pembayaran)", current.gaji_total],
         ["Laba Bersih", current.laba_bersih],
         ["Jumlah Transaksi", current.tx_count],
       ];
-      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(ringkasan)), "Ringkasan");
+      XLSX.utils.book_append_sheet(wb, styledSummarySheet(ringkasan, [5, 6, 7, 8, 9, 10]), "Ringkasan");
 
       if (d.perCabang) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.perCabang), "Per Cabang");
       if (d.transaksi) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.transaksi.map((t) => ({
@@ -9543,6 +9599,16 @@ function SettingAkun({ pushNotif }) {
       if (d.pengeluaranLapak) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengeluaranLapak), "Pengeluaran Lapak");
       if (d.pengeluaranOwner) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengeluaranOwner), "Pengeluaran Owner");
       if (d.gajiPembayaran) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.gajiPembayaran), "Gaji");
+      if (d.setoranHarian) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.setoranHarian), "Setoran Harian");
+      if (d.produksiCK) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.produksiCK), "Produksi CK");
+      if (d.distribusiCK) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.distribusiCK), "Distribusi CK");
+      if (d.stokTidakTerjual) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.stokTidakTerjual), "Waste");
+      if (d.absensi) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.absensi), "Absensi");
+      if (d.pengambilanBelanja) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengambilanBelanja), "Belanja Bahan");
+      if (d.masterCabang) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.masterCabang), "Master Cabang");
+      if (d.masterMenu) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.masterMenu), "Master Menu");
+      if (d.masterBahan) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.masterBahan), "Master Bahan");
+      if (d.masterToping) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.masterToping), "Master Toping");
 
       XLSX.writeFile(wb, `TutupBuku_${current.bulan}_v${current.versi}.xlsx`);
     };
@@ -9904,7 +9970,7 @@ function SettingAkun({ pushNotif }) {
         ["Laba Bersih", current.laba_bersih],
         ["Jumlah Transaksi", current.tx_count],
       ];
-      XLSX.utils.book_append_sheet(wb, styleSheet(XLSX.utils.aoa_to_sheet(ringkasan)), "Ringkasan");
+      XLSX.utils.book_append_sheet(wb, styledSummarySheet(ringkasan, [5, 6, 7, 8, 9, 10]), "Ringkasan");
 
       if (d.perBulan) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.perBulan), "Per Bulan");
       if (d.perCabang) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.perCabang), "Per Cabang");
