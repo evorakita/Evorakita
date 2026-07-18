@@ -1157,7 +1157,7 @@ var EvoraDonuts = (() => {
   var HISTORY_MODE_DB_KEY = "history_mode";
   var JADWAL_LIBUR_DB_KEY = "jadwal_libur";
   var JADWAL_LIBUR_ALLOWED_DAYS = new Set(["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]);
-  var isActiveProfile = (profile) => !!profile && profile.role !== "none" && profile.status !== "deleted" && !profile.deleted_at && !profile.deletedAt;
+  var isActiveProfile = (profile) => !!profile && profile.role !== "none" && profile.status !== "deleted" && profile.aktif !== false && !profile.deleted_at && !profile.deletedAt;
   // ─── Area Manager (multi-kota scale) ─────────────────────────────────────
   // profile.role === "manager"
   // profile.cities = ["Karawang","Bandung"]  (atau profile.city string tunggal)
@@ -9126,13 +9126,40 @@ function SettingAkun({ pushNotif }) {
     const list = (S.get("pengambilanBelanja") || []).slice().sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
     const totalHppMasuk = distribAll.reduce((a, d) => a + (d.hppTotal || 0), 0);
     const totalDiambil = list.reduce((a, p) => a + (p.jumlah || 0), 0);
-    const saldo = totalHppMasuk - totalDiambil;
 
     const [form, setForm] = useState({ jumlah: "", keterangan: "", fotoUrl: "", fotoPath: "" });
     const [showForm, setShowForm] = useState(false);
     const [busy, setBusy] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [confirmAsk, confirmModal] = useConfirm();
+    const [modalAwal, setModalAwal] = useState(0);
+    const [modalAwalInput, setModalAwalInput] = useState("");
+    const saldo = modalAwal + totalHppMasuk - totalDiambil;
+
+    useEffect(() => {
+      sb.from("app_settings").select("value").eq("key", "kas_belanja_modal_awal").maybeSingle()
+        .then(({ data }) => {
+          const n = Number(data?.value?.jumlah || 0) || 0;
+          setModalAwal(n);
+          setModalAwalInput(String(n || ""));
+        }).catch(() => {});
+    }, [tick]);
+
+    const saveModalAwal = async () => {
+      const jumlah = Number(modalAwalInput) || 0;
+      if (jumlah < 0) { pushNotif("Modal awal tidak boleh negatif.", "warning"); return; }
+      setBusy(true);
+      try {
+        const { error } = await sb.from("app_settings").upsert({
+          key: "kas_belanja_modal_awal",
+          value: { jumlah, updatedAt: nowIso() }
+        });
+        if (error) throw error;
+        setModalAwal(jumlah);
+        pushNotif("Modal awal bahan disimpan.", "success");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+      finally { setBusy(false); }
+    };
 
     const doUploadNota = async (e) => {
       const file = e.target.files?.[0]; if (!file) return;
@@ -9183,8 +9210,17 @@ function SettingAkun({ pushNotif }) {
     const askHapus = (p) => confirmAsk({ title: "Hapus Riwayat", message: `Hapus catatan pengambilan "${fmtRp(p.jumlah)}" ini?`, onConfirm: () => hapus(p.id) });
 
     return React.createElement("div", null,
-      React.createElement("h3", { className: "section-title mt8" }, "Uang jatah belanja bahan"),
-      React.createElement("p", { className: "info-txt" }, "Saldo ini otomatis bertambah setiap ada distribusi bahan ke cabang (sebesar HPP-nya), dan berkurang setiap kali diambil untuk belanja. Tujuannya meminimalisir kebocoran uang belanja."),
+      React.createElement("h3", { className: "section-title mt8" }, "Uang bahan & modal kerja"),
+      React.createElement("p", { className: "info-txt" }, "Restok pertama dicatat sebagai modal kerja bahan. Jatah HPP dari distribusi dicatat terpisah dari belanja aktual, sehingga tidak otomatis terlihat minus hanya karena belum ada penjualan."),
+      React.createElement("div", { className: "form-card mt8" },
+        React.createElement("h4", null, "Modal Awal Dana Bahan"),
+        React.createElement("div", { className: "field-group" },
+          React.createElement("label", null, "Modal awal / dana yang disiapkan (Rp)"),
+          React.createElement("input", { className: "inp", type: "number", min: 0, value: modalAwalInput, onChange: (e) => setModalAwalInput(e.target.value), placeholder: "Contoh: 500000" })
+        ),
+        React.createElement("button", { className: "btn-secondary btn-sm", onClick: saveModalAwal, disabled: busy }, busy ? "Menyimpan..." : "Simpan modal awal"),
+        React.createElement("p", { className: "info-txt" }, "Saldo dana bahan = modal awal + jatah HPP distribusi − belanja aktual.")
+      ),
       React.createElement("div", { className: "kpi-card kpi-modal mt8", style: { maxWidth: 280 } },
         React.createElement("div", { className: "kpi-label" }, "Saldo Kas Belanja Tersedia"),
         React.createElement("div", { className: "kpi-val", style: { color: saldo >= 0 ? "var(--accent)" : "var(--red)", fontSize: 22 } }, fmtRp(saldo))
