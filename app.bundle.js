@@ -1798,6 +1798,91 @@ var EvoraDonuts = (() => {
     return menu?.tipe === "paket" ? info.hppPaket : info.hppSatuanPerPcs;
   };
 
+  // HPP komponen yang disimpan di setiap item transaksi.
+  // Donat polos tetap dipecah ke bahan dasar (kentang/gandum/dll),
+  // sementara glaze/topping dihitung sesuai takaran yang benar-benar dipilih.
+  var addHppComponent = (map, key, nama, qty, unitHpp, jenis) => {
+    if (!key || !qty) return;
+    const q = Number(qty) || 0;
+    const h = Number(unitHpp) || 0;
+    if (!map[key]) map[key] = { key, nama: nama || key, jenis: jenis || "bahan", qty: 0, hpp: 0 };
+    map[key].qty += q;
+    map[key].hpp += q * h;
+  };
+
+  var getHppComponentsForItem = (item) => {
+    const out = {};
+    const bahanList = S.get("bahanPokok") || [];
+    const topings = S.get("topingTambahan") || [];
+    const menus = S.get("menuVarian") || [];
+    const qtyItem = Number(item?.qty) || 0;
+    const baseMenuId = item?.basePolosId || item?.baseMenuId || item?.menuId;
+    const baseMenu = menus.find((m) => m.id === baseMenuId);
+
+    const addBase = (n) => {
+      if (!baseMenu || n <= 0) return;
+      (baseMenu.resepBahanPokok || []).forEach((r) => {
+        const b = bahanList.find((x) => x.id === r.bahanId);
+        if (!b) return;
+        const per = Number(r.jumlahPakai || 1) || 1;
+        addHppComponent(out, "bahan:" + b.id, b.nama, per * n, getBahanHppPerPcs(b), "bahan_dasar");
+      });
+    };
+    const addGlaze = (glazeId, n) => {
+      const g = topings.find((x) => x.id === glazeId && x.jenis === "glaze");
+      if (!g || n <= 0) return;
+      const per = Number(g.porsiPerPcs || 1) || 1;
+      const unit = g.hargaPerSatuan != null
+        ? Number(g.hargaPerSatuan) * per
+        : (Number(g.hargaBeli || 0) / Math.max(Number(g.kapasitas || 1), 1));
+      addHppComponent(out, "glaze:" + g.id, g.nama, n, unit, "glaze");
+    };
+    const addToping = (topingId, n, jenis = "topping") => {
+      const t = topings.find((x) => x.id === topingId && x.jenis !== "glaze");
+      if (!t || n <= 0) return;
+      const unit = t.hargaPerSatuan != null && t.porsiPerPcs
+        ? Number(t.hargaPerSatuan) * Number(t.porsiPerPcs)
+        : (Number(t.hargaBeli || 0) / Math.max(Number(t.kapasitas || 1), 1));
+      addHppComponent(out, "topping:" + t.id, t.nama, n, unit, jenis);
+    };
+
+    if (Array.isArray(item?.slotIsi) && item.slotIsi.length) {
+      item.slotIsi.forEach((slot) => {
+        addBase(qtyItem);
+        addGlaze(slot.glaze, qtyItem);
+        (slot.toping || []).forEach((tid) => addToping(tid, qtyItem));
+      });
+      const box = Number(item.boxCost || 0) || 0;
+      if (box > 0) addHppComponent(out, "box:" + (item.menuId || "box"), item.nama || "Box", qtyItem, box, "box");
+    } else {
+      addBase(qtyItem);
+      addGlaze(item.glazeId, qtyItem);
+      if (item.topingId) addToping(item.topingId, qtyItem);
+      (item.topingIds || []).forEach((tid) => addToping(tid, qtyItem, "topping_tambahan"));
+      if (item.tipe === "paket") {
+        const box = Number(item.boxCost || (menus.find((m) => m.id === item.menuId)?.boxCost) || 0) || 0;
+        if (box > 0) addHppComponent(out, "box:" + item.menuId, item.nama || "Box", qtyItem, box, "box");
+      }
+    }
+    const components = Object.values(out).map((x) => ({ ...x, hpp: roundHppRp(x.hpp) }));
+    return { components, total: components.reduce((a, x) => a + x.hpp, 0) };
+  };
+
+  var aggregateHppComponents = (transactions, from, to) => {
+    const map = {};
+    (transactions || []).filter((t) => (!from || t.date >= from) && (!to || t.date <= to)).forEach((t) => {
+      (t.items || []).forEach((item) => {
+        const saved = item.hppComponents || getHppComponentsForItem(item).components;
+        (saved || []).forEach((c) => {
+          if (!map[c.key]) map[c.key] = { ...c, qty: 0, hpp: 0 };
+          map[c.key].qty += Number(c.qty) || 0;
+          map[c.key].hpp += Number(c.hpp) || 0;
+        });
+      });
+    });
+    return Object.values(map).map((x) => ({ ...x, hpp: roundHppRp(x.hpp) })).sort((a, b) => b.hpp - a.hpp);
+  };
+
   // ═══════════════════════════════════════════════════════════════════════
   // STOK BAHAN BAKU GUDANG (yield-pcs)
   // Satuan stok = ekuivalen "pcs hasil/yield" sama seperti field kapasitas bahan
@@ -3144,7 +3229,10 @@ function useConfirm() {
       }
 
       const txId = uid();
-      const itemsPayload = cart.map((x) => ({ ...x }));
+      const itemsPayload = cart.map((x) => {
+        const comp = getHppComponentsForItem(x);
+        return { ...x, hppComponents: comp.components, hppComponentsTotal: comp.total };
+      });
       const totalHPP = cart.reduce((a, x) => a + x.hpp * x.qty, 0);
 
       // ─── Data bayar (kasir pintar) ───
@@ -9214,6 +9302,7 @@ function SettingAkun({ pushNotif }) {
       if (!error) { await S.loadKey("pengambilanBelanja"); pushNotif("Riwayat dihapus.", "warning"); }
     };
     const askHapus = (p) => confirmAsk({ title: "Hapus Riwayat", message: `Hapus catatan pengambilan "${fmtRp(p.jumlah)}" ini?`, onConfirm: () => hapus(p.id) });
+    const hppKomponenHariIni = aggregateHppComponents(S.get("transactions") || [], today(), today());
 
     return React.createElement("div", null,
       React.createElement("h3", { className: "section-title mt8" }, "Uang bahan & modal kerja"),
@@ -9234,6 +9323,34 @@ function SettingAkun({ pushNotif }) {
       React.createElement("div", { className: "row-wrap mt4", style: { fontSize: 12, color: "var(--text2)" } },
         React.createElement("span", null, "Total HPP Masuk: ", React.createElement("strong", { style: { color: "var(--text)" } }, fmtRp(totalHppMasuk))),
         React.createElement("span", null, "Total Sudah Diambil: ", React.createElement("strong", { style: { color: "var(--text)" } }, fmtRp(totalDiambil)))
+      ),
+      React.createElement("div", { className: "card mt8" },
+        React.createElement("h4", null, "Alokasi HPP Terjual Hari Ini"),
+        React.createElement("p", { className: "info-txt" }, "HPP donat polos sudah dipecah per bahan dasar; glaze dan topping dihitung sesuai rasa yang dipilih pembeli."),
+        hppKomponenHariIni.length === 0
+          ? React.createElement("p", { className: "empty-txt" }, "Belum ada penjualan hari ini.")
+          : React.createElement("div", { className: "tbl-wrap" },
+              React.createElement("table", { className: "tbl" },
+                React.createElement("thead", null, React.createElement("tr", null,
+                  React.createElement("th", null, "Komponen"),
+                  React.createElement("th", null, "Jenis"),
+                  React.createElement("th", null, "Qty"),
+                  React.createElement("th", null, "Alokasi HPP")
+                )),
+                React.createElement("tbody", null,
+                  hppKomponenHariIni.map((c) => React.createElement("tr", { key: c.key },
+                    React.createElement("td", null, c.nama),
+                    React.createElement("td", null, c.jenis),
+                    React.createElement("td", null, Number(c.qty).toLocaleString("id-ID", { maximumFractionDigits: 3 })),
+                    React.createElement("td", null, fmtRp(c.hpp))
+                  )),
+                  React.createElement("tr", { style: { fontWeight: 800, borderTop: "2px solid var(--border)" } },
+                    React.createElement("td", { colSpan: 3 }, "TOTAL HPP TERJUAL"),
+                    React.createElement("td", null, fmtRp(hppKomponenHariIni.reduce((a, c) => a + c.hpp, 0)))
+                  )
+                )
+              )
+            )
       ),
       !showForm && React.createElement("button", { className: "btn-primary mt8", onClick: () => setShowForm(true) }, "\uD83D\uDED2 Ambil Uang untuk Belanja"),
       showForm && React.createElement("div", { className: "form-card mt8" },
@@ -9493,6 +9610,7 @@ function SettingAkun({ pushNotif }) {
           masterMenu: S.get("menuVarian") || [],
           masterBahan: S.get("bahanPokok") || [],
           masterToping: S.get("topingTambahan") || [],
+          hppKomponen: aggregateHppComponents(txs, from, to),
         },
       };
     };
@@ -9638,6 +9756,9 @@ function SettingAkun({ pushNotif }) {
         tanggal: t.date, branchId: t.branchId, total: t.total, totalHPP: t.totalHPP,
         items: (t.items || []).map((i) => i.nama + " x" + i.qty).join(", "),
       }))), "Transaksi");
+      if (d.hppKomponen) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.hppKomponen.map((c) => ({
+        Komponen: c.nama, Jenis: c.jenis, "Qty Terpakai": c.qty, "Alokasi HPP": c.hpp
+      }))), "HPP per Komponen");
       if (d.pengeluaranLapak) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengeluaranLapak), "Pengeluaran Lapak");
       if (d.pengeluaranOwner) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.pengeluaranOwner), "Pengeluaran Owner");
       if (d.gajiPembayaran) XLSX.utils.book_append_sheet(wb, styledJsonSheet(d.gajiPembayaran), "Gaji");
