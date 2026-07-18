@@ -9125,7 +9125,13 @@ function SettingAkun({ pushNotif }) {
     const distribAll = (S.get("distribusiCK") || []).filter((d) => d.status !== "dibatalkan");
     const list = (S.get("pengambilanBelanja") || []).slice().sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
     const totalHppMasuk = distribAll.reduce((a, d) => a + (d.hppTotal || 0), 0);
-    const totalDiambil = list.reduce((a, p) => a + (p.jumlah || 0), 0);
+    const totalDiambil = list.filter((p) => p.status !== "dibatalkan").reduce((a, p) => {
+      const diambil = Number(p.jumlah) || 0;
+      const kembali = p.status === "diterima" && p.jumlahTerpakai != null
+        ? Math.max(0, diambil - Number(p.jumlahTerpakai))
+        : 0;
+      return a + (diambil - kembali);
+    }, 0);
 
     const [form, setForm] = useState({ jumlah: "", keterangan: "", fotoUrl: "", fotoPath: "" });
     const [showForm, setShowForm] = useState(false);
@@ -10514,6 +10520,12 @@ function SettingAkun({ pushNotif }) {
 
   function BelanjaPanel({ pushNotif, me }) {
     const tick = useStoreTick();
+    const [modalAwalBelanja, setModalAwalBelanja] = useState(0);
+    useEffect(() => {
+      sb.from("app_settings").select("value").eq("key", "kas_belanja_modal_awal").maybeSingle()
+        .then(({ data }) => setModalAwalBelanja(Number(data?.value?.jumlah || 0) || 0))
+        .catch(() => {});
+    }, [tick]);
     const [subtab, setSubtab] = useState("ambil"); // ambil | terima | riwayat
     const [busy, setBusy] = useState(false);
     const [confirmAsk, confirmModal] = useConfirm();
@@ -10534,7 +10546,7 @@ function SettingAkun({ pushNotif }) {
       const kembali = p.status === "diterima" && p.jumlahTerpakai != null ? Math.max(0, diambil - Number(p.jumlahTerpakai)) : 0;
       return a + (diambil - kembali);
     }, 0);
-    const saldoKas = totalJatah - totalAmbil;
+    const saldoKas = modalAwalBelanja + totalJatah - totalAmbil;
 
     const namaSaya = me?.display_name || me?.displayName || me?.email || "Owner";
 
@@ -11386,6 +11398,12 @@ function SettingAkun({ pushNotif }) {
     // ─── SettingGudangBahan — stok bahan baku (yield-pcs) + ledger ───────────
   function SettingGudangBahan({ pushNotif, goSetting }) {
     const tick = useStoreTick();
+    const [modalAwalBahan, setModalAwalBahan] = useState(0);
+    useEffect(() => {
+      sb.from("app_settings").select("value").eq("key", "kas_belanja_modal_awal").maybeSingle()
+        .then(({ data }) => setModalAwalBahan(Number(data?.value?.jumlah || 0) || 0))
+        .catch(() => {});
+    }, [tick]);
     const bahan = S.get("bahanPokok") || [];
     const ledger = getStokBahanLedger().slice().sort((a, b) => String(b.ts || b.date).localeCompare(String(a.ts || a.date)));
     const saldoMap = getAllStokBahanSaldoMap();
@@ -11416,7 +11434,7 @@ function SettingAkun({ pushNotif }) {
     const ambilAll = S.get("pengambilanBelanja") || [];
     const totalJatahAll = distribAktif.reduce((a, d) => a + (d.hppTotal || 0), 0);
     const totalAmbilAll = ambilAll.reduce((a, p) => a + (p.jumlah || 0), 0);
-    const saldoKasBelanja = totalJatahAll - totalAmbilAll;
+    const saldoKasBelanja = modalAwalBahan + totalJatahAll - totalAmbilAll;
 
     const doCatat = async () => {
       if (!form.bahanId) { pushNotif("Pilih bahan dulu.", "warning"); return; }
@@ -11661,7 +11679,7 @@ function SettingAkun({ pushNotif }) {
 
       React.createElement("div", { className: "kpi-grid mt8" },
         React.createElement("div", { className: "kpi-card" },
-          React.createElement("div", { className: "kpi-label" }, "Saldo Kas Belanja (jatah)"),
+          React.createElement("div", { className: "kpi-label" }, "Saldo Dana Bahan"),
           React.createElement("div", { className: "kpi-val", style: { color: saldoKasBelanja < 0 ? "var(--red)" : "var(--green)" } }, fmtRp(saldoKasBelanja))
         ),
         React.createElement("div", { className: "kpi-card kpi-peng" },
