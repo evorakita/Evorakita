@@ -2868,6 +2868,12 @@ function useConfirm() {
     const [offlineCount, setOfflineCount] = useState(() => (typeof getOfflineTxQueue === "function" ? getOfflineTxQueue().length : 0));
     const [payBusy, setPayBusy] = useState(false);
     const [lastReceiptTx, setLastReceiptTx] = useState(null);
+    const [presetRasa, setPresetRasa] = useState([]);
+    useEffect(() => {
+      sb.from("app_settings").select("value").eq("key", "preset_rasa").maybeSingle()
+        .then(({ data }) => setPresetRasa(Array.isArray(data?.value) ? data.value : []))
+        .catch(() => setPresetRasa([]));
+    }, [tick]);
     useEffect(() => {
       const sync = () => {
         try { setOfflineCount(getOfflineTxQueue().length); } catch {}
@@ -3840,6 +3846,15 @@ function useConfirm() {
             });
             // set glaze lalu auto-buka donat berikutnya (accordion)
             const setSlotGlazeAuto = (i, gid) => { setSlotGlaze(i, gid); if (i < isi - 1) setSlotOpenIdx(i + 1); };
+            const setSlotPreset = (i, preset) => {
+              setSlotBox((s) => {
+                if (!s) return s;
+                const sl = s.slots.slice();
+                sl[i] = { ...sl[i], glaze: preset.glazeId, toping: preset.toppingId ? [preset.toppingId] : [] };
+                return { ...s, slots: sl };
+              });
+              if (i < isi - 1) setSlotOpenIdx(i + 1);
+            };
             // hitung harga tambahan toping ke-2 dst
             let hargaTambahan = 0;
             slotBox.slots.forEach((s) => (s.toping || []).forEach((tid, idx) => { if (idx >= 1) { const tp = topingTambahanList.find((t) => t.id === tid); if (tp) hargaTambahan += (tp.hargaJual || 0); } }));
@@ -3860,6 +3875,7 @@ function useConfirm() {
                   React.createElement("div", { className: "slotbox-counter" + (penuh ? " slotbox-counter-full" : "") },
                     "Sudah dipilih ", React.createElement("strong", null, terisi + " / " + isi), " donat", penuh ? " \u2705" : ""
                   ),
+                  React.createElement("p", { className: "info-txt", style: { margin: "8px 0 10px" } }, "Setiap donat: pilih 1 glaze + 1 topping dasar termasuk harga. Topping ke-2 dan seterusnya dihitung sebagai tambahan berbayar."),
                   slotBox.slots.map((s, i) => {
                     const open = slotOpenIdx === i;
                     const done = !!s.glaze || glazeList.length === 0;
@@ -3883,7 +3899,7 @@ function useConfirm() {
                           )
                         ),
                         topingTambahanList.length > 0 && React.createElement(React.Fragment, null,
-                          React.createElement("div", { className: "slot-lbl" }, "Toping (1 gratis, ke-2 dst bayar)"),
+                          React.createElement("div", { className: "slot-lbl" }, "Topping (pilih 1 termasuk harga; pilihan ke-2+ berbayar)"),
                           React.createElement("div", { className: "slot-opts" },
                             topingTambahanList.map((t) => {
                               const cur = s.toping || [];
@@ -7780,29 +7796,14 @@ function useConfirm() {
         React.createElement("label", null, "Isi Box (pcs)"),
         React.createElement("input", { className: "inp", type: "number", value: m.isiBox || 3, onChange: (e) => setM((x) => ({ ...x, isiBox: parseInt(e.target.value) || 3 })) })
       ),
-      // Mode box: satu rasa | campur rasa | per slot (polos + glaze/toping)
-      isPaket && (() => {
-        const mode = m.boxMode || (m.mixMode ? "campur" : "satu");
-        const setMode = (val) => setM((x) => ({ ...x, boxMode: val, mixMode: val === "campur" }));
-        return React.createElement("div", { className: "field-group" },
-          React.createElement("label", null, "Jenis Box"),
-          React.createElement("div", { className: "diskon-methods", style: { gridTemplateColumns: "1fr" } },
-            [
-              { id: "satu", label: "\uD83C\uDF69 Satu rasa (dari 1 menu dasar)" },
-              { id: "campur", label: "\uD83C\uDF6A Campur rasa (pilih rasa donat jadi)" },
-              { id: "slot", label: "\uD83E\uDED4 Per slot: donat polos + glaze/toping" }
-            ].map((opt) => React.createElement("button", {
-              key: opt.id, type: "button",
-              className: "diskon-method" + (mode === opt.id ? " active" : ""),
-              onClick: () => setMode(opt.id)
-            }, opt.label))
-          ),
-          React.createElement("p", { className: "info-txt", style: { fontSize: 11 } },
-            mode === "slot" ? "Tiap donat dalam box: kasir pilih glaze + 1 toping (gratis, sepaket). Toping ke-2 dst kena biaya tambahan. Pilih menu donat polos di bawah."
-            : mode === "campur" ? "Kasir pilih rasa donat jadi untuk isi box. Stok tiap rasa berkurang otomatis."
-            : "Semua isi dari satu menu satuan dasar di bawah ini.")
-        );
-      })(),
+      // Semua box memakai model universal per-slot.
+      isPaket && React.createElement("div", { className: "field-group" },
+        React.createElement("label", null, "Jenis Box"),
+        React.createElement("div", { className: "diskon-methods", style: { gridTemplateColumns: "1fr" } },
+          React.createElement("button", { type: "button", className: "diskon-method active", disabled: true }, "🍩 Paket Universal — pilih rasa per donat")
+        ),
+        React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Setiap donat dalam box memilih 1 glaze + 1 topping dasar yang sudah termasuk harga. Topping ke-2 dan seterusnya berbayar.")
+      ),
       // Menu donat polos (untuk mode slot) — potong stok polos
       isPaket && (m.boxMode === "slot") && React.createElement("div", { className: "field-group" },
         React.createElement("label", null, "Menu Donat Polos (untuk potong stok)"),
@@ -7898,9 +7899,9 @@ function useConfirm() {
   // ─── REVISI #1: SettingHPP baru — input Harga Beli + Kapasitas ─────────────
   function SettingHPP({ pushNotif, initialSub, onConsumedFocus }) {
     const tick = useStoreTick();
-    const [sub, setSub] = useState(() => (initialSub === "menu" || initialSub === "bahan" || initialSub === "toping") ? initialSub : "bahan");
+    const [sub, setSub] = useState(() => (initialSub === "menu" || initialSub === "bahan" || initialSub === "toping" || initialSub === "preset") ? initialSub : "bahan");
     useEffect(() => {
-      if (initialSub === "menu" || initialSub === "bahan" || initialSub === "toping") {
+      if (initialSub === "menu" || initialSub === "bahan" || initialSub === "toping" || initialSub === "preset") {
         setSub(initialSub);
         if (onConsumedFocus) onConsumedFocus();
       }
@@ -7914,11 +7915,16 @@ function useConfirm() {
     const [nB, setNB] = useState({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" });
     // Toping tambahan tetap: nama, hargaJual, plus untuk HPP: hargaBeli, kapasitas
     const [nT, setNT] = useState({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" });
+    const [presets, setPresets] = useState([]);
+    const [presetForm, setPresetForm] = useState({ id: null, nama: "", glazeId: "", toppingId: "" });
 
     useEffect(() => {
       setBahan(S.get("bahanPokok") || []);
       setMenus((S.get("menuVarian") || []).filter((m) => m.tipe !== "paket"));
       setTopings(S.get("topingTambahan") || []);
+      sb.from("app_settings").select("value").eq("key", "preset_rasa").maybeSingle()
+        .then(({ data }) => setPresets(Array.isArray(data?.value) ? data.value : []))
+        .catch(() => setPresets([]));
     }, [tick]);
 
     useEffect(() => {
@@ -7999,8 +8005,32 @@ function useConfirm() {
     const askDelT = (t) => confirmAsk({ title: "Hapus Toping", message: `Yakin hapus "${t.nama}"? Cek dulu apakah masih dipakai.`, onConfirm: () => delT(t.id) });
     const editT = (t) => setNT({ editId: t.id, nama: t.nama, hargaBeli: String(t.hargaBeli), kapasitas: String(t.kapasitas), hargaJual: String(t.hargaJual), satuanStok: t.satuanStok || "gram", isiPerBeli: t.isiPerBeli != null ? String(t.isiPerBeli) : "", jenis: t.jenis || "topping", porsiPerPcs: t.porsiPerPcs != null ? String(t.porsiPerPcs) : "" });
 
+    const savePreset = async () => {
+      if (!presetForm.nama || !presetForm.glazeId || !presetForm.toppingId) {
+        pushNotif("Isi nama preset, glaze, dan topping.", "warning"); return;
+      }
+      const row = { id: presetForm.id || uid(), nama: presetForm.nama.trim(), glazeId: presetForm.glazeId, toppingId: presetForm.toppingId, updatedAt: nowIso() };
+      const next = presetForm.id ? presets.map((p) => p.id === row.id ? row : p) : [...presets, row];
+      try {
+        const { error } = await sb.from("app_settings").upsert({ key: "preset_rasa", value: next });
+        if (error) throw error;
+        setPresets(next);
+        setPresetForm({ id: null, nama: "", glazeId: "", toppingId: "" });
+        pushNotif("Preset rasa disimpan.", "success");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+    };
+    const editPreset = (p) => setPresetForm({ id: p.id, nama: p.nama, glazeId: p.glazeId, toppingId: p.toppingId });
+    const deletePreset = async (p) => {
+      const next = presets.filter((x) => x.id !== p.id);
+      try {
+        const { error } = await sb.from("app_settings").upsert({ key: "preset_rasa", value: next });
+        if (error) throw error;
+        setPresets(next); pushNotif("Preset rasa dihapus.", "warning");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+    };
+
     const SUB_TABS = ["bahan", "menu", "toping"];
-    const SUB_LABEL = { bahan: "Bahan Pokok", menu: "Varian Menu", toping: "Topping" };
+    const SUB_LABEL = { bahan: "Bahan Dasar Donat", menu: "Menu & Box", preset: "Preset Rasa", toping: "Glaze & Topping" };
 
     return React.createElement("div", null,
       React.createElement("div", { className: "tabs tabs-sm" },
@@ -8009,7 +8039,7 @@ function useConfirm() {
 
       // ── Sub: Bahan Pokok ──
       sub === "bahan" && React.createElement("div", null,
-        React.createElement("h3", { className: "section-title mt8" }, "Bahan baku"),
+        React.createElement("h3", { className: "section-title mt8" }, "Bahan Dasar Donat"),
         React.createElement("p", { className: "info-txt" }, "Masukkan total harga beli dan hasil jadi (kapasitas/yield). Contoh: Tepung 1kg Rp 10.000 → 10 pcs adonan → HPP/pcs = Rp 1.000."),
         React.createElement("table", { className: "tbl mt8" },
           React.createElement("thead", null,
@@ -8133,7 +8163,51 @@ function useConfirm() {
         );
       })(),
 
-      // ── Sub: Toping Tambahan ──
+      // ── Sub: Preset Rasa ──
+      sub === "preset" && React.createElement("div", null,
+        React.createElement("h3", { className: "section-title mt8" }, "Preset Rasa"),
+        React.createElement("p", { className: "info-txt" }, "Preset rasa adalah kombinasi 1 glaze + 1 topping dasar. Preset bukan stok dan bukan produk baru; ini hanya mempercepat pilihan pekerja di kasir."),
+        React.createElement("div", { className: "form-card mt8" },
+          React.createElement("h4", null, presetForm.id ? "Edit Preset Rasa" : "Tambah Preset Rasa"),
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Nama preset"),
+            React.createElement("input", { className: "inp", value: presetForm.nama, placeholder: "Contoh: Cokelat Kacang", onChange: (e) => setPresetForm((x) => ({ ...x, nama: e.target.value })) })
+          ),
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Glaze"),
+            React.createElement("select", { className: "inp", value: presetForm.glazeId, onChange: (e) => setPresetForm((x) => ({ ...x, glazeId: e.target.value })) },
+              React.createElement("option", { value: "" }, "-- Pilih glaze --"),
+              topings.filter((t) => t.jenis === "glaze").map((t) => React.createElement("option", { key: t.id, value: t.id }, t.nama))
+            )
+          ),
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Topping dasar"),
+            React.createElement("select", { className: "inp", value: presetForm.toppingId, onChange: (e) => setPresetForm((x) => ({ ...x, toppingId: e.target.value })) },
+              React.createElement("option", { value: "" }, "-- Pilih topping --"),
+              topings.filter((t) => t.jenis !== "glaze").map((t) => React.createElement("option", { key: t.id, value: t.id }, t.nama))
+            )
+          ),
+          React.createElement("div", { className: "row-wrap" },
+            React.createElement("button", { className: "btn-primary", onClick: savePreset }, presetForm.id ? "Simpan Perubahan" : "Simpan Preset"),
+            presetForm.id && React.createElement("button", { className: "btn-secondary", onClick: () => setPresetForm({ id: null, nama: "", glazeId: "", toppingId: "" }) }, "Batal")
+          )
+        ),
+        presets.length === 0
+          ? React.createElement(EmptyState, { icon: "✨", title: "Belum ada preset rasa", desc: "Buat preset seperti Cokelat Kacang agar kasir bisa memilih rasa dengan cepat." })
+          : presets.map((p) => {
+              const g = topings.find((t) => t.id === p.glazeId);
+              const t = topings.find((x) => x.id === p.toppingId);
+              return React.createElement("div", { key: p.id, className: "menu-setting-card" },
+                React.createElement("div", { className: "menu-setting-row" },
+                  React.createElement("strong", null, p.nama),
+                  React.createElement(RowMenu, { actions: [{ label: "Edit", onClick: () => editPreset(p) }, { label: "Hapus", danger: true, onClick: () => deletePreset(p) }] })
+                ),
+                React.createElement("div", { className: "info-txt mt8" }, "Glaze: ", g?.nama || "-", " · Topping: ", t?.nama || "-")
+              );
+            })
+      ),
+
+      // ── Sub: Glaze & Topping ──
       sub === "toping" && React.createElement("div", null,
         React.createElement("h3", { className: "section-title mt8" }, "Topping"),
         React.createElement("p", { className: "info-txt" }, "HPP toping dihitung dari: Harga Beli Toping ÷ Kapasitas (jadi berapa pcs). Contoh: Glaze 1kg Rp 40.000 → 10 pcs → HPP = Rp 4.000/pcs."),
@@ -11460,7 +11534,7 @@ function SettingAkun({ pushNotif }) {
     // Sub-pengaturan dikelompokkan jadi 4 kategori (lebih mudah dicari)
     const SETTING_GROUPS = [
       { label: "\uD83C\uDF69 Produk & Menu", items: [
-        { key: "hpp", label: "Menu & modal (HPP)", icon: "\uD83C\uDF69" },
+        { key: "hpp", label: "Donat, glaze & resep", icon: "\uD83C\uDF69" },
         { key: "paket", label: "Isi box", icon: "\uD83D\uDCE6" },
         { key: "stok", label: "Stok di toko", icon: "\uD83D\uDCE6" },
       ]},
