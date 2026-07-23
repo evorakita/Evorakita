@@ -125,7 +125,16 @@ var EvoraDonuts = (() => {
       danaPemeliharaan: "danaPemeliharaan",
       stokTidakTerjual: "stokTidakTerjual",
       pengambilanBelanja: "pengambilanBelanja",
-      gajiPembayaran: "gajiPembayaran"
+      gajiPembayaran: "gajiPembayaran",
+      materialStockLedger: "material_stock_ledger",
+      materialPurchases: "material_purchases",
+      productionBatches: "production_batches",
+      productionMaterialLines: "production_material_lines",
+      finishedStockLedger: "finished_stock_ledger",
+      stockTransfers: "stock_transfers",
+      stockTransferLines: "stock_transfer_lines",
+      payrollPeriods: "payroll_periods",
+      payrollLines: "payroll_lines"
     };
     const LOCAL_KEYS = new Set(["notified_ids", "jadwalLibur"]);
     let cache = {};
@@ -160,10 +169,11 @@ var EvoraDonuts = (() => {
     const DATE_SCOPED = {
       transactions: "date", setoranHarian: "date", absensi: "date",
       pengeluaranLapak: "date", pengeluaranOwner: "date", produksiCK: "date",
+      materialStockLedger: "date", materialPurchases: "date", productionBatches: "date", finishedStockLedger: "date", stockTransfers: "date",
       distribusiCK: "date", stokTidakTerjual: "date", pengambilanBelanja: "date"
     };
     const MONTH_SCOPED = {
-      setoranBulanan: "bulan", absensiBulanan: "bulan", gajiPembayaran: "bulan"
+      setoranBulanan: "bulan", absensiBulanan: "bulan", gajiPembayaran: "bulan", payrollPeriods: "bulan"
     };
     let cacheMeta = { from: null, to: null, loadedAt: null };
 
@@ -289,6 +299,45 @@ var EvoraDonuts = (() => {
     const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
     return { get, set, setLocal, loadAll, loadKey, ensureRange, getCacheMeta: () => ({ ...cacheMeta }), startRealtime, stopRealtime, reset, subscribe, setErrorHandler };
   })();
+
+
+  // Adapter sementara untuk memastikan layar legacy membaca ledger normalized.
+  // Sumber kebenaran tetap tabel baru; projection hanya bentuk data UI lama.
+  var syncNormalizedOperationalState = async () => {
+    try {
+      const branches = S.get("branches") || [];
+      const [prodRes, trRes, lineRes, payRes, payLineRes] = await Promise.all([
+        sb.from("production_batches").select("*"),
+        sb.from("stock_transfers").select("*"),
+        sb.from("stock_transfer_lines").select("*"),
+        sb.from("payroll_periods").select("*"),
+        sb.from("payroll_lines").select("*")
+      ]);
+      if (!prodRes.error && Array.isArray(prodRes.data)) {
+        S.setLocal("produksiCK", prodRes.data.map((p) => ({
+          id: p.id, date: p.date, ts: p.created_at, branchId: p.branch_id,
+          branchName: branches.find((b) => b.id === p.branch_id)?.name || p.branch_id,
+          menuId: p.menu_id, menuNama: p.menu_name || p.menu_id,
+          jumlah: p.quantity, hppTotalProduksi: p.hpp_total,
+          hppPerPcs: p.quantity ? Number(p.hpp_total || 0) / Number(p.quantity) : 0,
+          createdBy: p.created_by
+        })));
+      }
+      if (!trRes.error && !lineRes.error && Array.isArray(trRes.data) && Array.isArray(lineRes.data)) {
+        const transfers = Object.fromEntries((trRes.data || []).map((t) => [t.id, t]));
+        const mapped = lineRes.data.map((l) => {
+          const t = transfers[l.transfer_id] || {};
+          const status = t.status === "completed" || t.status === "partially_received" ? "diterima" : t.status === "in_transit" ? "perjalanan" : t.status === "cancelled" ? "dibatalkan" : "pending";
+          return { id: t.id + ":" + l.id, transferId: t.id, lineId: l.id, date: t.date, ts: t.created_at, produksiId: null, menuId: l.menu_id, menuNama: l.menu_id, branchId: l.to_branch_id, branchName: branches.find((b) => b.id === l.to_branch_id)?.name || l.to_branch_id, jumlahKirim: l.quantity_sent, jumlahTerima: l.quantity_good, selisih: (l.quantity_missing || 0) + (l.quantity_damaged || 0), catatanSelisih: l.note, hppPerPcs: l.unit_cost, hppTotal: Number(l.quantity_sent || 0) * Number(l.unit_cost || 0), status };
+        });
+        S.setLocal("distribusiCK", mapped);
+      }
+      if (!payRes.error && !payLineRes.error && Array.isArray(payRes.data) && Array.isArray(payLineRes.data)) {
+        const periods = Object.fromEntries((payRes.data || []).map((p) => [p.id, p]));
+        S.setLocal("gajiPembayaran", payLineRes.data.map((l) => ({ ...l, id: l.id, user_id: l.user_id, bulan: periods[l.payroll_id]?.bulan, jumlah: l.jumlah, gajiHarian: l.gaji_harian, hadir: l.hadir, status: periods[l.payroll_id]?.status === "paid" ? "dikonfirmasi" : "dikirim" })));
+      }
+    } catch (e) { /* normalized adapter is best-effort; source tables remain authoritative */ }
+  };
 
   // ─── Formatters ────────────────────────────────────────────────────────────
   var fmtRp = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
@@ -1741,8 +1790,14 @@ var EvoraDonuts = (() => {
 
   var getBahanHppPerPcs = (bahan, { rounded } = {}) => {
     const hargaBeli = parseFloat(bahan?.hargaBeli || 0) || 0;
+    const isiBeli = Number(bahan?.isiBeli || 0) || 0;
+    const takaran = Number(bahan?.takaranPerPcs || 0) || 0;
     const kapasitas = Math.max(parseInt(bahan?.kapasitas || 1) || 1, 1);
-    const raw = hargaBeli / kapasitas;
+    // Jika takaran fisik tersedia, gunakan harga per satuan x takaran.
+    // Fallback ke harga beli/yield untuk data lama.
+    const raw = isiBeli > 0 && takaran > 0
+      ? (hargaBeli / isiBeli) * takaran
+      : hargaBeli / kapasitas;
     return rounded ? roundHppRp(raw) : raw;
   };
 
@@ -1757,11 +1812,9 @@ var EvoraDonuts = (() => {
     }, 0);
 
     // HPP toping/varian per menu: masing-masing punya hargaBeli + kapasitas sendiri (RAW)
-    const hppTopingRaw = (menu.resepToping || []).reduce((acc, t) => {
-      const hb = parseFloat(t.hargaBeli || 0) || 0;
-      const kap = Math.max(parseInt(t.kapasitas || 1) || 1, 1);
-      return acc + (hb / kap);
-    }, 0);
+    // Model bisnis final: glaze/topping dipilih per slot kasir, bukan resep tetap menu.
+    // `resepToping` lama diabaikan untuk transaksi baru agar HPP tidak dobel.
+    const hppTopingRaw = 0;
 
     // Satu pembulatan di hasil satuan (bukan ceil berlapis per komponen)
     const hppSatuanPerPcs = roundHppRp(hppAdonanRaw + hppTopingRaw);
@@ -1920,18 +1973,48 @@ var EvoraDonuts = (() => {
   };
   var loadStokBahanFromDb = async () => {
     try {
-      const { data, error } = await sb.from("app_settings").select("value").eq("key", STOK_BAHAN_DB_KEY).maybeSingle();
+      const { data, error } = await sb.from("material_stock_ledger").select("*").order("created_at", { ascending: true });
       if (error) throw error;
-      return setStokBahanLedgerLocal(data?.value || []);
-    } catch {
+      const bahanListNow = S.get("bahanPokok") || [];
+      const mapped = (data || []).map((r) => ({
+        id: r.legacy_id || r.id,
+        bahanId: r.bahan_id,
+        bahanNama: bahanListNow.find((b) => b.id === r.bahan_id)?.nama || r.bahan_id,
+        tipe: r.source_type === "production" ? "produksi" : (r.direction === "in" ? "masuk" : r.direction === "out" ? "keluar" : "koreksi"),
+        qty: Math.abs(Number(r.quantity) || 0),
+        qtySign: r.direction === "out" ? -(Number(r.quantity) || 0) : Number(r.quantity) || 0,
+        date: String(r.date || today()).slice(0, 10),
+        ts: r.created_at || nowIso(),
+        note: r.note || null,
+        refType: r.source_type || null,
+        refId: r.source_id || null,
+        menuId: null, menuNama: null, qtyMenu: null
+      }));
+      return setStokBahanLedgerLocal(mapped);
+    } catch (e) {
       return getStokBahanLedger();
     }
   };
-  var saveStokBahanToDb = async (ledger) => {
-    const n = normalizeStokBahanLedger(ledger);
-    const { error } = await sb.from("app_settings").upsert({ key: STOK_BAHAN_DB_KEY, value: n });
+  var saveStokBahanToDb = async (rows) => {
+    const branches = S.get("branches") || [];
+    const ck = branches.find((b) => b.type === "central_kitchen") || branches[0];
+    const payload = (rows || []).map((r) => {
+      const isCorrection = r.tipe === "koreksi";
+      const signed = isCorrection ? Number(r.qtySign != null ? r.qtySign : r.qty) || 0 : 0;
+      const direction = isCorrection ? (signed >= 0 ? "in" : "out") : ((r.tipe === "masuk" || r.tipe === "retur_produksi") ? "in" : "out");
+      const qty = isCorrection ? Math.abs(signed) : Math.abs(Number(r.qty) || 0);
+      const bahan = (S.get("bahanPokok") || []).find((b) => b.id === r.bahanId);
+      return {
+        area_id: ck?.areaId || null, branch_id: r.branchId || ck?.id,
+        bahan_id: r.bahanId, date: r.date || today(), direction, quantity: qty,
+        unit_cost: bahan ? getBahanHppPerPcs(bahan) : 0,
+        source_type: r.refType || r.tipe || "manual", source_id: r.refId || r.id || uid(), note: r.note || null, created_by: null
+      };
+    }).filter((r) => r.branch_id && r.bahan_id && r.quantity > 0);
+    if (!payload.length) return loadStokBahanFromDb();
+    const { error } = await sb.from("material_stock_ledger").insert(payload);
     if (error) throw error;
-    return setStokBahanLedgerLocal(n);
+    return loadStokBahanFromDb();
   };
   var signedQtyStok = (e) => {
     if (!e) return 0;
@@ -1981,26 +2064,7 @@ var EvoraDonuts = (() => {
   };
   var catatStokBahanRows = async (rows) => {
     if (!rows || !rows.length) return getStokBahanLedger();
-    const ledger = [...getStokBahanLedger()];
-    rows.forEach((r) => {
-      ledger.push({
-        id: r.id || uid(),
-        bahanId: r.bahanId,
-        bahanNama: r.bahanNama || null,
-        tipe: r.tipe,
-        qty: Math.abs(Number(r.qty) || 0),
-        qtySign: r.tipe === "koreksi" ? Number(r.qtySign != null ? r.qtySign : r.qty) || 0 : undefined,
-        date: r.date || today(),
-        ts: r.ts || nowIso(),
-        note: r.note || null,
-        refType: r.refType || null,
-        refId: r.refId || null,
-        menuId: r.menuId || null,
-        menuNama: r.menuNama || null,
-        qtyMenu: r.qtyMenu != null ? r.qtyMenu : null
-      });
-    });
-    return saveStokBahanToDb(ledger);
+    return saveStokBahanToDb(rows);
   };
   var cekStokBahanCukupUntukProduksi = (menu, jumlah) => {
     const pakai = hitungPemakaianBahanMenu(menu, jumlah);
@@ -2798,6 +2862,15 @@ function useConfirm() {
       const selisih = jml - (d.jumlahKirim || 0);
       setBusy(true);
       try {
+        // Jika distribusi baru memakai transfer normalized, konfirmasi line secara atomic.
+        if (d.transferId) {
+          const { data: line, error: lineError } = await sb.from("stock_transfer_lines").select("id").eq("transfer_id", d.transferId).eq("to_branch_id", d.branchId).eq("menu_id", d.menuId).maybeSingle();
+          if (lineError) throw lineError;
+          if (line?.id) {
+            const { error: receiveError } = await sb.rpc("confirm_stock_transfer_line", { p_line_id: line.id, p_quantity_good: jml, p_quantity_damaged: 0, p_quantity_missing: Math.max(0, (d.jumlahKirim || 0) - jml), p_note: catatan.trim() || null });
+            if (receiveError) throw receiveError;
+          }
+        }
         const { error } = await sb.from("distribusiCK").update({ jumlahTerima: jml, selisih, catatanSelisih: catatan.trim(), status: "diterima", confirmedAt: nowIso() }).eq("id", d.id);
         if (error) throw error;
         await S.loadKey("distribusiCK");
@@ -3521,27 +3594,7 @@ function useConfirm() {
         : { id: uid(), user_id: userId, branchId: me?.branchId || branchId, date: targetDate, checkin_ts: isoForDate(targetDate), checkout_ts: null };
       S.set("absensi", ex ? all.map((a) => a.id === row.id ? row : a) : [...all, row]);
 
-      // ─── Gaji harian otomatis masuk pengeluaran saat check-in ───
-      // REVISI 2026-07: nominal dari HISTORI GAJI pada tanggal check-in.
-      try {
-        const gajiHarian = getGajiHarianPadaTanggal(userId, targetDate, me?.gajiHarian);
-        if (gajiHarian > 0) {
-          const pOwnerAll = S.get("pengeluaranOwner") || [];
-          const sudahAda = pOwnerAll.find((p) => p.autoGajiUserId === userId && p.date === targetDate);
-          if (!sudahAda) {
-            const namaPekerja = me?.display_name || me?.displayName || me?.email || "Pekerja";
-            const branchNm = branches.find((b) => b.id === (me?.branchId || branchId))?.name || "";
-            const { error } = await sb.from("pengeluaranOwner").insert([{
-              id: uid(), date: targetDate, ts: tsForDate(targetDate),
-              keterangan: `Gaji Harian - ${namaPekerja}`, jumlah: gajiHarian,
-              kategori: "gaji_pekerja", branchId: me?.branchId || branchId, branchName: branchNm,
-              autoGajiUserId: userId, gajiRateDate: targetDate, gajiFromHistori: true
-            }]);
-            if (!error) await S.loadKey("pengeluaranOwner");
-          }
-        }
-      } catch (e) { /* gaji auto-insert gagal, tidak blok proses checkin */ }
-
+      // Check-in hanya membentuk kehadiran/gaji terutang; pembayaran payroll dilakukan terpisah.
       pushNotif("Check-in berhasil.", "success");
     };
 
@@ -4714,9 +4767,24 @@ function useConfirm() {
       setDistribBusy((b) => ({ ...b, [p.id]: true }));
       try {
         const hppPerPcsDistrib = roundHppRp(p.hppPerPcs || getMenuHPPBreakdown(menus.find((m) => m.id === p.menuId))?.hppSatuanPerPcs || 0);
+        const areaId = p.areaId || branches.find((b) => b.id === p.branchId)?.areaId || null;
+        const lineMap = {};
+        entries.forEach((e) => { lineMap[e.branchId] = { menuId: p.menuId, quantity: e.jumlah, unitCost: hppPerPcsDistrib }; });
+        const transferId = "tr-" + p.id + "-" + entries.map((e) => e.branchId + "-" + e.jumlah).sort().join("_");
+        const { error: transferError } = await sb.rpc("dispatch_stock_transfer", {
+          p_id: transferId,
+          p_area_id: areaId,
+          p_from_branch_id: p.branchId,
+          p_date: p.date,
+          p_lines: lineMap,
+          p_courier_id: null,
+          p_note: "Distribusi dari produksi " + p.id
+        });
+        if (transferError) throw transferError;
+        // Legacy projection sementara untuk tampilan lama; sumber stok resmi adalah stock_transfers.
         const rows = entries.map((e) => {
           const branch = branches.find((b) => b.id === e.branchId);
-          return { id: uid(), date: p.date, ts: tsForDate(p.date), produksiId: p.id, menuId: p.menuId, menuNama: p.menuNama, totalProduksi: p.jumlah, branchId: e.branchId, branchName: branch?.name || e.branchId, jumlahKirim: e.jumlah, hppPerPcs: hppPerPcsDistrib, hppTotal: hppPerPcsDistrib * e.jumlah, status: "pending" };
+          return { id: uid(), date: p.date, ts: tsForDate(p.date), produksiId: p.id, transferId, menuId: p.menuId, menuNama: p.menuNama, totalProduksi: p.jumlah, branchId: e.branchId, branchName: branch?.name || e.branchId, jumlahKirim: e.jumlah, hppPerPcs: hppPerPcsDistrib, hppTotal: hppPerPcsDistrib * e.jumlah, status: "pending" };
         });
         const { error } = await sb.from("distribusiCK").insert(rows);
         if (error) throw error;
@@ -7840,7 +7908,7 @@ function useConfirm() {
         const hpp = b ? getBahanHppPerPcs(b) * (r.jumlahPakai || 1) : 0;
         return React.createElement("div", { key: i, className: "resep-row" },
           b?.nama || "?",
-          " × ", r.jumlahPakai || 1, " pcs",
+          " × ", r.jumlahPakai || 1, " takaran", 
           " → HPP: ", fmtRp(roundHppRp(hpp)),
           " ",
           React.createElement("button", { className: "btn-danger-sm", onClick: () => delRB(i) }, "X")
@@ -7851,26 +7919,11 @@ function useConfirm() {
           bahan.length === 0 && React.createElement("option", null, "-- Tambah bahan dulu --"),
           bahan.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama, " (HPP: ", fmtRp(getBahanHppPerPcs(b, { rounded: true })), "/pcs)"))
         ),
-        React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Pcs pakai", value: nRB.jumlahPakai, onChange: (e) => setNRB((x) => ({ ...x, jumlahPakai: e.target.value })), style: { width: 80 } }),
+        React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Takaran per donat", value: nRB.jumlahPakai, onChange: (e) => setNRB((x) => ({ ...x, jumlahPakai: e.target.value })), style: { width: 80 } }),
         React.createElement("button", { className: "btn-primary btn-sm", onClick: addRB }, "+")
       ),
-      // Toping/Varian Menu
-      React.createElement("h4", { className: "sub-title" }, "Toping / Varian Menu"),
-      React.createElement("p", { className: "info-txt" }, "Tambah toping spesifik untuk menu ini. Isi harga beli toping + kapasitas (jadi berapa pcs)."),
-      m.resepToping.map((t, i) => {
-        const hpp = roundHppRp((t.hargaBeli || 0) / Math.max(t.kapasitas || 1, 1));
-        return React.createElement("div", { key: i, className: "resep-row" },
-          t.nama, " → HPP: ", fmtRp(hpp), "/pcs",
-          " ",
-          React.createElement("button", { className: "btn-danger-sm", onClick: () => delRT(i) }, "X")
-        );
-      }),
-      React.createElement("div", { className: "add-row" },
-        React.createElement("input", { className: "inp inp-sm", placeholder: "Nama toping/varian", value: nRT.nama, onChange: (e) => setNRT((x) => ({ ...x, nama: e.target.value })) }),
-        React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Harga Beli Total", value: nRT.hargaBeli, onChange: (e) => setNRT((x) => ({ ...x, hargaBeli: e.target.value })), style: { width: 120 } }),
-        React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Jadi (pcs)", value: nRT.kapasitas, onChange: (e) => setNRT((x) => ({ ...x, kapasitas: e.target.value })), style: { width: 80 } }),
-        React.createElement("button", { className: "btn-primary btn-sm", onClick: addRT }, "+")
-      ),
+      // Glaze dan topping tidak menjadi resep tetap menu.
+      // Pilihan glaze/topping dilakukan per slot di kasir.
       // Preview HPP
       React.createElement("div", { className: "hpp-preview" },
         "HPP Adonan/pcs: ", React.createElement("strong", null, fmtRp(info.hppAdonanPerPcs)),
@@ -7912,7 +7965,7 @@ function useConfirm() {
     const [editMenu, setEditMenu] = useState(null);
     const [confirmAsk, confirmModal] = useConfirm();
     // Bahan Pokok baru: nama, hargaBeli (total), kapasitas (yield pcs), satuanBeli (opsional keterangan)
-    const [nB, setNB] = useState({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" });
+    const [nB, setNB] = useState({ nama: "", hargaBeli: "", isiBeli: "", satuanStok: "gram", takaranPerPcs: "", kapasitas: "", satuanBeli: "" });
     // Toping tambahan tetap: nama, hargaJual, plus untuk HPP: hargaBeli, kapasitas
     const [nT, setNT] = useState({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" });
     const [presets, setPresets] = useState([]);
@@ -7937,20 +7990,24 @@ function useConfirm() {
 
     const saveB = () => {
       if (!nB.nama || !nB.hargaBeli || !nB.kapasitas) { pushNotif("Isi nama, harga beli, dan kapasitas!", "warning"); return; }
-      const hppPerPcs = parseFloat(nB.hargaBeli) / Math.max(parseInt(nB.kapasitas), 1);
+      const isiBeli = Number(nB.isiBeli) || 0;
+      const takaranPerPcs = Number(nB.takaranPerPcs) || 0;
+      const yieldPcs = isiBeli > 0 && takaranPerPcs > 0 ? isiBeli / takaranPerPcs : (parseInt(nB.kapasitas) || 0);
+      if (yieldPcs <= 0) { pushNotif("Isi pembelian + takaran per donat, atau isi yield lama.", "warning"); return; }
+      const hppPerPcs = getBahanHppPerPcs({ hargaBeli: parseFloat(nB.hargaBeli), isiBeli, takaranPerPcs, kapasitas: yieldPcs });
       if (nB.editId) {
-        const u = bahan.map((x) => x.id === nB.editId ? { ...x, nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), kapasitas: parseInt(nB.kapasitas), satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || "pcs", hppPerPcs: roundHppRp(hppPerPcs) } : x);
+        const u = bahan.map((x) => x.id === nB.editId ? { ...x, nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), isiBeli: isiBeli || null, satuanStok: nB.satuanStok || "gram", takaranPerPcs: takaranPerPcs || null, kapasitas: yieldPcs, satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || nB.satuanStok || "gram", hppPerPcs: roundHppRp(hppPerPcs) } : x);
         S.set("bahanPokok", u); setBahan(u);
-        setNB({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" });
+        setNB({ nama: "", hargaBeli: "", isiBeli: "", satuanStok: "gram", takaranPerPcs: "", kapasitas: "", satuanBeli: "" });
         pushNotif("Bahan diperbarui! HPP menu yang memakainya ikut ter-update.", "success");
         return;
       }
-      const u = [...bahan, { id: uid(), nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), kapasitas: parseInt(nB.kapasitas), satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || "pcs", hppPerPcs: roundHppRp(hppPerPcs) }];
+      const u = [...bahan, { id: uid(), nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), isiBeli: isiBeli || null, satuanStok: nB.satuanStok || "gram", takaranPerPcs: takaranPerPcs || null, kapasitas: yieldPcs, satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || nB.satuanStok || "gram", hppPerPcs: roundHppRp(hppPerPcs) }];
       S.set("bahanPokok", u); setBahan(u);
-      setNB({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" });
+      setNB({ nama: "", hargaBeli: "", isiBeli: "", satuanStok: "gram", takaranPerPcs: "", kapasitas: "", satuanBeli: "" });
       pushNotif("Bahan ditambah!", "success");
     };
-    const editB = (b) => { setNB({ editId: b.id, nama: b.nama, hargaBeli: String(b.hargaBeli), kapasitas: String(b.kapasitas), satuanBeli: b.satuanBeli || "" }); };
+    const editB = (b) => { setNB({ editId: b.id, nama: b.nama, hargaBeli: String(b.hargaBeli), isiBeli: b.isiBeli != null ? String(b.isiBeli) : "", satuanStok: b.satuanStok || "gram", takaranPerPcs: b.takaranPerPcs != null ? String(b.takaranPerPcs) : "", kapasitas: String(b.kapasitas || ""), satuanBeli: b.satuanBeli || "" }); };
 
     const delB = (id) => { const u = bahan.filter((x) => x.id !== id); S.set("bahanPokok", u); setBahan(u); pushNotif("Bahan dihapus.", "warning"); };
     const askDelB = (b) => confirmAsk({ title: "Hapus Bahan", message: `Yakin hapus "${b.nama}"?`, onConfirm: () => delB(b.id) });
@@ -7958,7 +8015,7 @@ function useConfirm() {
     const saveMenu = (m) => {
       const all = S.get("menuVarian") || [];
       const savedId = m.id || uid();
-      const row = { ...m, id: savedId };
+      const row = { ...m, id: savedId, resepToping: [] };
       const u = all.find((x) => x.id === m.id) ? all.map((x) => x.id === m.id ? row : x) : [...all, row];
       S.set("menuVarian", u);
       const satuan = u.filter((x) => x.tipe !== "paket");
@@ -7982,12 +8039,14 @@ function useConfirm() {
     const askDelMenu = (m) => confirmAsk({ title: "Hapus Menu", message: `Yakin hapus menu "${m.nama}"?`, onConfirm: () => delMenu(m.id) });
 
     const saveT = () => {
-      if (!nT.nama || !nT.hargaBeli || !nT.kapasitas || !nT.hargaJual) { pushNotif("Isi semua kolom toping!", "warning"); return; }
+      if (!nT.nama || !nT.hargaBeli || !nT.isiPerBeli || !nT.porsiPerPcs) { pushNotif("Isi nama, harga beli, isi pembelian, dan takaran per donat!", "warning"); return; }
       const isiPerBeli = parseFloat(nT.isiPerBeli) || 0;
       const hargaBeli = parseFloat(nT.hargaBeli);
       // Harga per satuan stok (mis. Rp/gram) untuk menilai opname; kalau isiPerBeli kosong, biarkan null
       const hargaPerSatuan = isiPerBeli > 0 ? (hargaBeli / isiPerBeli) : null;
-      const fields = { nama: nT.nama, hargaBeli, kapasitas: parseInt(nT.kapasitas), hargaJual: parseFloat(nT.hargaJual), satuanStok: nT.satuanStok || "gram", isiPerBeli: isiPerBeli || null, hargaPerSatuan, jenis: nT.jenis || "topping", porsiPerPcs: nT.porsiPerPcs ? parseFloat(nT.porsiPerPcs) : null };
+      const porsiPerPcs = parseFloat(nT.porsiPerPcs) || 0;
+      const kapasitas = isiPerBeli > 0 && porsiPerPcs > 0 ? isiPerBeli / porsiPerPcs : (parseInt(nT.kapasitas) || 1);
+      const fields = { nama: nT.nama, hargaBeli, kapasitas, hargaJual: parseFloat(nT.hargaJual) || 0, satuanStok: nT.satuanStok || "gram", isiPerBeli: isiPerBeli || null, hargaPerSatuan, jenis: nT.jenis || "topping", porsiPerPcs };
       if (nT.editId) {
         const u = topings.map((x) => x.id === nT.editId ? { ...x, ...fields } : x);
         S.set("topingTambahan", u); setTopings(u);
@@ -8033,6 +8092,7 @@ function useConfirm() {
     const SUB_LABEL = { bahan: "Bahan Dasar Donat", menu: "Menu & Box", preset: "Preset Rasa", toping: "Glaze & Topping" };
 
     return React.createElement("div", null,
+      React.createElement("div", { className: "info-txt", style: { marginBottom: 8 } }, "Urutan setup: 1) Bahan Dasar Donat dan takaran fisik → 2) Glaze & Topping → 3) Menu & Box. Glaze/topping dipilih bebas di kasir, bukan resep tetap menu."),
       React.createElement("div", { className: "tabs tabs-sm" },
         SUB_TABS.map((t) => React.createElement("button", { key: t, className: "tab" + (sub === t ? " active" : ""), onClick: () => setSub(t) }, SUB_LABEL[t]))
       ),
@@ -8057,7 +8117,7 @@ function useConfirm() {
                 React.createElement("td", null, b.nama, b.satuanBeli ? React.createElement("span", { style: { fontSize: 11, color: "var(--text2)", marginLeft: 4 } }, "(", b.satuanBeli, ")") : null),
                 React.createElement("td", null, fmtRp(b.hargaBeli)),
                 React.createElement("td", null, b.kapasitas, " pcs"),
-                React.createElement("td", { style: { color: "var(--accent)", fontWeight: 700 } }, fmtRp(roundHppRp(b.hargaBeli / Math.max(b.kapasitas, 1)))),
+                React.createElement("td", { style: { color: "var(--accent)", fontWeight: 700 } }, fmtRp(getBahanHppPerPcs(b, { rounded: true }))),
                 React.createElement("td", { className: "row-actions-cell" }, React.createElement(RowMenu, { actions: [{ label: "Edit", onClick: () => editB(b) }, { label: "Hapus", danger: true, onClick: () => askDelB(b) }] }))
               )
             )
@@ -8074,15 +8134,26 @@ function useConfirm() {
             React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 10000", value: nB.hargaBeli, onChange: (e) => setNB((x) => ({ ...x, hargaBeli: e.target.value })) })
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Kapasitas / Yield (bisa jadi berapa pcs)"),
-            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 10", value: nB.kapasitas, onChange: (e) => setNB((x) => ({ ...x, kapasitas: e.target.value })) })
+            React.createElement("label", null, "Isi pembelian (dalam satuan stok)"),
+            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 1000", value: nB.isiBeli, onChange: (e) => setNB((x) => ({ ...x, isiBeli: e.target.value })) }),
+            React.createElement("select", { className: "inp inp-sm", value: nB.satuanStok, onChange: (e) => setNB((x) => ({ ...x, satuanStok: e.target.value })) },
+              React.createElement("option", { value: "gram" }, "Gram"),
+              React.createElement("option", { value: "ml" }, "ml"),
+              React.createElement("option", { value: "pcs" }, "Pcs")
+            )
           ),
-          nB.hargaBeli && nB.kapasitas && React.createElement("div", { className: "hpp-preview" },
-            "HPP per pcs = ", React.createElement("strong", null, fmtRp(roundHppRp(parseFloat(nB.hargaBeli || 0) / Math.max(parseInt(nB.kapasitas || 1), 1))))
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Takaran per 1 donat"),
+            React.createElement("input", { className: "inp", type: "number", step: "0.001", placeholder: "Contoh: 14.93", value: nB.takaranPerPcs, onChange: (e) => setNB((x) => ({ ...x, takaranPerPcs: e.target.value })) }),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Contoh: 14,93 gram kentang untuk 1 donat. Yield dihitung otomatis dari isi pembelian ÷ takaran.")
+          ),
+          nB.hargaBeli && nB.isiBeli && nB.takaranPerPcs && React.createElement("div", { className: "hpp-preview" },
+            "Yield otomatis: ", React.createElement("strong", null, (Number(nB.isiBeli) / Math.max(Number(nB.takaranPerPcs), 0.000001)).toFixed(2), " pcs"),
+            " | HPP per donat = ", React.createElement("strong", null, fmtRp(roundHppRp((Number(nB.hargaBeli) / Number(nB.isiBeli)) * Number(nB.takaranPerPcs))))
           ),
           React.createElement("div", { className: "row-wrap mt8" },
             React.createElement("button", { className: "btn-primary", onClick: saveB }, nB.editId ? "Simpan Perubahan" : "+ Tambah Bahan"),
-            nB.editId && React.createElement("button", { className: "btn-secondary", onClick: () => setNB({ nama: "", hargaBeli: "", kapasitas: "", satuanBeli: "" }) }, "Batal")
+            nB.editId && React.createElement("button", { className: "btn-secondary", onClick: () => setNB({ nama: "", hargaBeli: "", isiBeli: "", satuanStok: "gram", takaranPerPcs: "", kapasitas: "", satuanBeli: "" }) }, "Batal")
           )
         )
       ),
@@ -8228,7 +8299,7 @@ function useConfirm() {
                 React.createElement("td", null, t.nama),
                 React.createElement("td", null, fmtRp(t.hargaBeli)),
                 React.createElement("td", null, t.kapasitas, " pcs"),
-                React.createElement("td", { style: { color: "var(--accent)", fontWeight: 700 } }, fmtRp(roundHppRp((t.hargaBeli || 0) / Math.max(t.kapasitas || 1, 1)))),
+                React.createElement("td", { style: { color: "var(--accent)", fontWeight: 700 } }, fmtRp(roundHppRp(t.hargaPerSatuan != null && t.porsiPerPcs ? Number(t.hargaPerSatuan) * Number(t.porsiPerPcs) : (Number(t.hargaBeli || 0) / Math.max(Number(t.kapasitas || 1), 1))))),
                 React.createElement("td", null, fmtRp(t.hargaJual)),
                 React.createElement("td", { className: "row-actions-cell" }, React.createElement(RowMenu, { actions: [{ label: "Edit", onClick: () => editT(t) }, { label: "Hapus", danger: true, onClick: () => askDelT(t) }] }))
               )
@@ -8257,18 +8328,18 @@ function useConfirm() {
             React.createElement("label", null, (nT.jenis === "glaze" ? "Nama Glaze" : "Nama Toping") + " & Ukuran Beli"),
             React.createElement("input", { className: "inp inp-sm", placeholder: nT.jenis === "glaze" ? "Contoh: Glaze Coklat 1kg" : "Contoh: Meses 1kg", value: nT.nama, onChange: (e) => setNT((x) => ({ ...x, nama: e.target.value })) })
           ),
-          nT.jenis === "glaze" && React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Porsi per donat (dalam satuan stok)"),
-            React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Contoh: 5 (=5 gram/donat)", value: nT.porsiPerPcs, onChange: (e) => setNT((x) => ({ ...x, porsiPerPcs: e.target.value })) }),
-            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Dipakai untuk hitung pemakaian glaze otomatis dari penjualan.")
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Takaran per donat (dalam satuan stok)"),
+            React.createElement("input", { className: "inp inp-sm", type: "number", step: "0.001", placeholder: "Contoh: 5 (=5 gram/donat)", value: nT.porsiPerPcs, onChange: (e) => setNT((x) => ({ ...x, porsiPerPcs: e.target.value })) }),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Dipakai untuk menghitung HPP dan stok setiap glaze/topping yang dipilih pembeli.")
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Harga Beli Total (Rp)"),
             React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Contoh: 40000", value: nT.hargaBeli, onChange: (e) => setNT((x) => ({ ...x, hargaBeli: e.target.value })) })
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Kapasitas (jadi berapa pcs)"),
-            React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Contoh: 10", value: nT.kapasitas, onChange: (e) => setNT((x) => ({ ...x, kapasitas: e.target.value })) })
+            React.createElement("label", null, "Yield otomatis"),
+            React.createElement("div", { className: "info-txt" }, nT.isiPerBeli && nT.porsiPerPcs ? (Number(nT.isiPerBeli) / Math.max(Number(nT.porsiPerPcs), 0.000001)).toFixed(2) + " takaran" : "Isi pembelian dan takaran untuk menghitung yield."),
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Satuan Stok (untuk opname)"),
@@ -8624,7 +8695,8 @@ function SettingAkun({ pushNotif }) {
   const [formErrors, setFormErrors] = useState({});
   const [actionBusy, setActionBusy] = useState("");
   const [jadwalLibur, setJadwalLibur] = useState(() => S.get("jadwalLibur") || {});
-  const [form, setForm] = useState({ role: "worker", email: "", password: "", displayName: "", branchId: branches[0]?.id || "", investorId: investors[0]?.id || "", gajiHarian: "", cities: "" });
+  const [areaOptions, setAreaOptions] = useState([]);
+  const [form, setForm] = useState({ role: "worker", email: "", password: "", displayName: "", branchId: branches[0]?.id || "", investorId: investors[0]?.id || "", gajiHarian: "", cities: "", areaId: "" });
   const cityOptions = useMemo(() => [...new Set((branches || []).map((b) => b.city).filter(Boolean))].sort(), [branches]);
   const [confirmAsk, confirmModal] = useConfirm();
 
@@ -8636,6 +8708,11 @@ function SettingAkun({ pushNotif }) {
     }));
     setJadwalLibur(S.get("jadwalLibur") || {});
   }, [tick, branches, investors]);
+
+  useEffect(() => {
+    sb.from("operational_areas").select("id,name").eq("active", true).order("name")
+      .then(({ data }) => setAreaOptions(data || [])).catch(() => setAreaOptions([]));
+  }, [tick]);
 
   const refreshInvites = async () => {
     setLoading(true);
@@ -8666,9 +8743,10 @@ function SettingAkun({ pushNotif }) {
       branchId: role === "worker" ? (prev.branchId || branches[0]?.id || "") : "",
       investorId: role === "investor" ? (prev.investorId || investors[0]?.id || "") : "",
       gajiHarian: role === "worker" ? prev.gajiHarian : "",
-      cities: role === "manager" ? prev.cities : ""
+      cities: role === "manager" ? prev.cities : "",
+      areaId: role === "manager" ? prev.areaId : ""
     }));
-    setFormErrors((prev) => ({ ...prev, role: "", branchId: "", investorId: "", gajiHarian: "", cities: "" }));
+    setFormErrors((prev) => ({ ...prev, role: "", branchId: "", investorId: "", gajiHarian: "", cities: "", areaId: "" }));
   };
 
   const validateForm = useCallback(() => {
@@ -8691,8 +8769,7 @@ function SettingAkun({ pushNotif }) {
     if (!["worker", "investor", "owner", "manager", "distribusi"].includes(form.role)) errors.role = "Role akun tidak valid.";
 
     if (form.role === "manager") {
-      const cities = normalizeCities(form.cities);
-      if (!cities.length) errors.cities = "Pilih minimal 1 kota untuk Area Manager.";
+      if (!form.areaId) errors.areaId = "Pilih Area Operasional untuk Manager.";
     }
 
     if (form.role === "worker") {
@@ -8744,14 +8821,14 @@ function SettingAkun({ pushNotif }) {
     const investorLabel = form.role === "investor"
       ? (investors.find((i) => i.id === form.investorId)?.nama || form.investorId)
       : "";
-    const managerCitiesLabel = form.role === "manager" ? normalizeCities(form.cities).join(", ") : "";
+    const managerAreaLabel = form.role === "manager" ? (areaOptions.find((a) => a.id === form.areaId)?.name || form.areaId) : "";
     const summary = [
       `Role: ${form.role === "worker" ? "Pekerja" : form.role === "distribusi" ? "Kurir/Distribusi" : form.role === "investor" ? "Investor" : form.role === "manager" ? "Area Manager" : "Owner"}`,
       `Login: ${validation.normalizedEmail}`,
       validation.displayName ? `Nama tampilan: ${validation.displayName}` : null,
       branchLabel ? `Cabang: ${branchLabel}` : null,
       investorLabel ? `Investor: ${investorLabel}` : null,
-      managerCitiesLabel ? `Kota: ${managerCitiesLabel}` : null,
+      managerAreaLabel ? `Area: ${managerAreaLabel}` : null,
       form.role === "worker" && form.gajiHarian !== "" ? `Gaji harian: ${fmtRp(Number(form.gajiHarian) || 0)}` : null,
       "Akun akan langsung aktif setelah berhasil dibuat."
     ].filter(Boolean).join("\n");
@@ -8781,6 +8858,7 @@ function SettingAkun({ pushNotif }) {
               branchId: form.role === "worker" ? form.branchId : null,
               investorId: form.role === "investor" ? form.investorId : null,
               gajiHarian: form.role === "worker" && form.gajiHarian !== "" ? Number(form.gajiHarian) : null,
+              areaId: form.role === "manager" ? form.areaId : null,
               cities: form.role === "manager" ? normalizeCities(form.cities) : null,
               city: form.role === "manager" ? (normalizeCities(form.cities)[0] || null) : null
             })
@@ -8798,7 +8876,8 @@ function SettingAkun({ pushNotif }) {
             branchId: branches[0]?.id || "",
             investorId: investors[0]?.id || "",
             gajiHarian: "",
-            cities: ""
+            cities: "",
+            areaId: ""
           });
           setFormErrors({});
           await reloadAccountData();
@@ -8930,25 +9009,13 @@ function SettingAkun({ pushNotif }) {
         ),
         formErrors.role && React.createElement("p", { className: "field-warning" }, formErrors.role),
         form.role === "manager" && React.createElement("div", { className: "field-group" },
-          React.createElement("label", null, "Kota yang dikelola (pisah koma)"),
-          React.createElement("input", {
-            className: "inp",
-            value: form.cities,
-            onChange: (e) => setForm((f) => ({ ...f, cities: e.target.value })),
-            placeholder: cityOptions.length ? ("Contoh: " + cityOptions.slice(0, 3).join(", ")) : "Karawang, Bandung"
-          }),
-          cityOptions.length > 0 && React.createElement("div", { className: "chips mt4" },
-            cityOptions.map((city) => React.createElement("button", {
-              key: city, type: "button", className: "chip",
-              onClick: () => {
-                const cur = normalizeCities(form.cities);
-                if (cur.some((x) => x.toLowerCase() === city.toLowerCase())) return;
-                setForm((f) => ({ ...f, cities: [...cur, city].join(", ") }));
-              }
-            }, "+ ", city))
+          React.createElement("label", null, "Area Operasional"),
+          React.createElement("select", { className: "inp", value: form.areaId, onChange: (e) => setForm((f) => ({ ...f, areaId: e.target.value })) },
+            React.createElement("option", { value: "" }, "-- pilih area --"),
+            areaOptions.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))
           ),
-          React.createElement("p", { className: "info-txt" }, "Area Manager hanya melihat cabang di kota ini. Isi kota di Setting → Cabang dulu."),
-          formErrors.cities && React.createElement("p", { className: "field-warning" }, formErrors.cities)
+          React.createElement("p", { className: "info-txt" }, "Manager mengakses Central Kitchen dan seluruh lapak yang terhubung ke area ini."),
+          formErrors.areaId && React.createElement("p", { className: "field-warning" }, formErrors.areaId)
         )
       ),
       React.createElement("div", { className: "field-group" },
@@ -11530,15 +11597,379 @@ function SettingAkun({ pushNotif }) {
   }
 
   // ─── OwnerSetting ──────────────────────────────────────────────────────────
+
+  // ─── SettingAreaOperasional — area, manager, CK, lapak, dana area ─────────
+  function SettingAreaOperasional({ pushNotif }) {
+    const tick = useStoreTick();
+    const [areas, setAreas] = useState([]);
+    const branches = S.get("branches") || [];
+    const profiles = (S.get("profiles") || []).filter(isActiveProfile);
+    const managers = profiles.filter((p) => p.role === "manager");
+    const [form, setForm] = useState({ id: "", name: "", code: "", managerId: "", ckId: "", modal: "", perLapak: "" });
+    const [selectedBranches, setSelectedBranches] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const [selectedAreaId, setSelectedAreaId] = useState("");
+    useEffect(() => {
+      sb.from("operational_areas").select("*").order("name").then(({ data }) => setAreas(data || [])).catch(() => setAreas([]));
+    }, [tick]);
+
+    const reloadAreaData = async () => {
+      await Promise.all([
+        S.loadKey("branches"),
+        S.loadKey("profiles").catch(() => {}),
+      ]);
+      // area tables are not part of the legacy Store map; force a UI tick via local cache marker.
+      S.setLocal("area_ui_tick", Date.now());
+    };
+    const loadArea = async (id) => {
+      if (!id) return;
+      const { data, error } = await sb.from("operational_areas").select("*").eq("id", id).maybeSingle();
+      if (error) { pushNotif(error.message, "warning"); return; }
+      const areaBranches = branches.filter((b) => b.areaId === id).map((b) => b.id);
+      setForm({ id: data?.id || "", name: data?.name || "", code: data?.code || "", managerId: data?.manager_id || "", ckId: data?.central_kitchen_id || "", modal: "", perLapak: "" });
+      setSelectedBranches(areaBranches);
+    };
+    useEffect(() => { if (selectedAreaId) loadArea(selectedAreaId); }, [selectedAreaId, tick]);
+
+    const toggleBranch = (id) => setSelectedBranches((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]);
+    const reset = () => { setForm({ id: "", name: "", code: "", managerId: "", ckId: "", modal: "", perLapak: "" }); setSelectedBranches([]); setSelectedAreaId(""); };
+
+    const saveArea = async () => {
+      if (!form.name.trim() || !form.code.trim()) { pushNotif("Nama dan kode area wajib diisi.", "warning"); return; }
+      if (!form.managerId) { pushNotif("Pilih Area Manager.", "warning"); return; }
+      if (!form.ckId) { pushNotif("Pilih Central Kitchen.", "warning"); return; }
+      if (!selectedBranches.length) { pushNotif("Pilih minimal satu lapak.", "warning"); return; }
+      setBusy(true);
+      try {
+        const areaId = form.id || ("area-" + uid());
+        const { error: ae } = await sb.from("operational_areas").upsert({ id: areaId, name: form.name.trim(), code: form.code.trim(), manager_id: form.managerId, central_kitchen_id: form.ckId, active: true, updated_at: nowIso() });
+        if (ae) throw ae;
+        const { error: me } = await sb.from("profiles").update({ areaId }).eq("user_id", form.managerId);
+        if (me) throw me;
+        const allAreaBranchIds = [...new Set([...selectedBranches, form.ckId])];
+        const { error: be } = await sb.from("branches").update({ areaId }).in("id", allAreaBranchIds);
+        if (be) throw be;
+
+        const modal = Math.max(0, Number(form.modal) || 0);
+        const perLapak = Math.max(0, Number(form.perLapak) || 0);
+        let { data: areaAccount, error: aaErr } = await sb.from("area_fund_accounts").select("*").eq("area_id", areaId).eq("account_type", "area").is("branch_id", null).maybeSingle();
+        if (aaErr) throw aaErr;
+        if (!areaAccount) {
+          const r = await sb.from("area_fund_accounts").insert({ area_id: areaId, account_type: "area", name: "Dana " + form.name.trim(), opening_balance: 0 }).select("*").single();
+          if (r.error) throw r.error; areaAccount = r.data;
+        }
+        const ensureAccount = async (accountType, branchId, name) => {
+          const q = await sb.from("area_fund_accounts").select("id").eq("area_id", areaId).eq("account_type", accountType).eq("branch_id", branchId).maybeSingle();
+          if (q.error) throw q.error;
+          if (q.data) return q.data.id;
+          const r = await sb.from("area_fund_accounts").insert({ area_id: areaId, account_type: accountType, branch_id: branchId, name, opening_balance: 0 }).select("id").single();
+          if (r.error) throw r.error; return r.data.id;
+        };
+        const ckAccountId = await ensureAccount("central_kitchen", form.ckId, "Dana CK " + (branches.find((b) => b.id === form.ckId)?.name || ""));
+        const branchAccountIds = [];
+        for (const bid of selectedBranches) branchAccountIds.push({ bid, id: await ensureAccount("branch", bid, "Kas " + (branches.find((b) => b.id === bid)?.name || bid)) });
+        if (modal > 0 && !form.id) {
+          const transferId = uid();
+          const base = { transfer_id: transferId, area_id: areaId, date: today(), transaction_type: "modal_awal", amount: modal, source_type: "owner", description: "Modal awal " + form.name.trim(), created_by: null, status: "posted" };
+          const r = await sb.from("area_fund_ledger").insert({ ...base, account_id: areaAccount.id, direction: "in" }); if (r.error) throw r.error;
+        }
+        if (modal > 0 && (perLapak > 0 || form.ckId)) {
+          const allocated = perLapak * selectedBranches.length;
+          const ckAmount = Math.max(0, modal - allocated);
+          if (ckAmount > 0) {
+            const transferId = uid();
+            const r = await sb.from("area_fund_ledger").insert([
+              { transfer_id: transferId, area_id: areaId, account_id: areaAccount.id, branch_id: null, date: today(), direction: "out", transaction_type: "alokasi_ck", amount: ckAmount, description: "Alokasi dana CK", status: "posted" },
+              { transfer_id: transferId, area_id: areaId, account_id: ckAccountId, branch_id: form.ckId, date: today(), direction: "in", transaction_type: "alokasi_ck", amount: ckAmount, description: "Alokasi dana CK", status: "posted" }
+            ]); if (r.error) throw r.error;
+          }
+          for (const x of branchAccountIds) if (perLapak > 0) {
+            const transferId = uid();
+            const r = await sb.from("area_fund_ledger").insert([
+              { transfer_id: transferId, area_id: areaId, account_id: areaAccount.id, date: today(), direction: "out", transaction_type: "alokasi_lapak", amount: perLapak, description: "Alokasi kas lapak", status: "posted" },
+              { transfer_id: transferId, area_id: areaId, account_id: x.id, branch_id: x.bid, date: today(), direction: "in", transaction_type: "alokasi_lapak", amount: perLapak, description: "Alokasi kas lapak", status: "posted" }
+            ]); if (r.error) throw r.error;
+          }
+        }
+        await reloadAreaData();
+        setSelectedAreaId(areaId); setForm((f) => ({ ...f, id: areaId, modal: "", perLapak: "" }));
+        pushNotif("Area operasional dan struktur dana berhasil disimpan.", "success");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+      finally { setBusy(false); }
+    };
+
+    const ckBranches = branches.filter((b) => b.type === "central_kitchen");
+    const lapakBranches = branches.filter((b) => b.type !== "central_kitchen");
+    return React.createElement("div", null,
+      React.createElement("h3", { className: "section-title mt8" }, "Area Operasional & Dana Area"),
+      React.createElement("p", { className: "info-txt" }, "Satu Area Operasional terdiri dari satu Central Kitchen, beberapa lapak, satu Area Manager, dan satu dana area."),
+      React.createElement("div", { className: "form-card mt8" },
+        React.createElement("h4", null, form.id ? "Edit Area Operasional" : "Buat Area Operasional"),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Pilih area yang sudah ada"), React.createElement("select", { className: "inp", value: selectedAreaId, onChange: (e) => e.target.value ? setSelectedAreaId(e.target.value) : reset() }, React.createElement("option", { value: "" }, "+ Buat area baru"), areas.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name)))),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Nama area"), React.createElement("input", { className: "inp", value: form.name, onChange: (e) => setForm((f) => ({ ...f, name: e.target.value })), placeholder: "Area Operasional Temanggung" })),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Kode area"), React.createElement("input", { className: "inp", value: form.code, onChange: (e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() })), placeholder: "TEM-01" })),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Area Manager"), React.createElement("select", { className: "inp", value: form.managerId, onChange: (e) => setForm((f) => ({ ...f, managerId: e.target.value })) }, React.createElement("option", { value: "" }, "-- pilih manager --"), managers.map((m) => React.createElement("option", { key: m.user_id, value: m.user_id }, m.display_name || m.email)))),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Central Kitchen"), React.createElement("select", { className: "inp", value: form.ckId, onChange: (e) => setForm((f) => ({ ...f, ckId: e.target.value })) }, React.createElement("option", { value: "" }, "-- pilih CK --"), ckBranches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name)))),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Lapak dalam area"), lapakBranches.length === 0 ? React.createElement("p", { className: "empty-txt" }, "Belum ada lapak.") : lapakBranches.map((b) => React.createElement("label", { key: b.id, className: "pay-check", style: { padding: "8px 0" } }, React.createElement("input", { type: "checkbox", checked: selectedBranches.includes(b.id), onChange: () => toggleBranch(b.id) }), React.createElement("span", null, b.name, " · ", b.city || "-")))),
+        React.createElement("div", { className: "two-col" },
+          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Modal awal area (Rp)"), React.createElement("input", { className: "inp", type: "number", min: 0, value: form.modal, onChange: (e) => setForm((f) => ({ ...f, modal: e.target.value })), placeholder: "10000000" })),
+          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Alokasi kas per lapak (Rp)"), React.createElement("input", { className: "inp", type: "number", min: 0, value: form.perLapak, onChange: (e) => setForm((f) => ({ ...f, perLapak: e.target.value })), placeholder: "300000" }))
+        ),
+        React.createElement("p", { className: "info-txt" }, "Dana CK dihitung otomatis: modal area − total alokasi kas lapak. Modal awal hanya dicatat sekali saat area baru dibuat."),
+        React.createElement("div", { className: "row-wrap" }, React.createElement("button", { className: "btn-primary", disabled: busy, onClick: saveArea }, busy ? "Menyimpan..." : "Simpan Area & Dana"), form.id && React.createElement("button", { className: "btn-secondary", onClick: reset }, "Buat Area Baru"))
+      )
+    );
+  }
+
+
+  // ─── SettingPayroll — payroll draft/approve/pay per area ───────────────────
+  function SettingPayroll({ pushNotif }) {
+    const tick = useStoreTick();
+    const [areas, setAreas] = useState([]);
+    const [areaId, setAreaId] = useState("");
+    const [bulan, setBulan] = useState(today().slice(0, 7));
+    const [period, setPeriod] = useState(null);
+    const [lines, setLines] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const load = async () => {
+      if (!areaId) { setPeriod(null); setLines([]); return; }
+      const p = await sb.from("payroll_periods").select("*").eq("area_id", areaId).eq("bulan", bulan).maybeSingle();
+      if (p.error) { pushNotif(p.error.message, "warning"); return; }
+      setPeriod(p.data || null);
+      if (p.data) {
+        const l = await sb.from("payroll_lines").select("*").eq("payroll_id", p.data.id).order("role");
+        if (l.error) { pushNotif(l.error.message, "warning"); return; }
+        setLines(l.data || []);
+      } else setLines([]);
+    };
+    useEffect(() => { sb.from("operational_areas").select("id,name").eq("active", true).order("name").then(({ data }) => setAreas(data || [])).catch(() => {}); }, [tick]);
+    useEffect(() => { load(); }, [areaId, bulan, tick]);
+    const hitung = async () => {
+      if (!areaId) { pushNotif("Pilih area.", "warning"); return; }
+      setBusy(true); try {
+        const { data, error } = await sb.rpc("create_payroll_period", { p_area_id: areaId, p_bulan: bulan });
+        if (error) throw error;
+        pushNotif("Payroll draft dibuat.", "success"); await load();
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); } finally { setBusy(false); }
+    };
+    const approve = async () => { if (!period) return; setBusy(true); try { const { error } = await sb.rpc("approve_payroll", { p_payroll_id: period.id }); if (error) throw error; pushNotif("Payroll disetujui.", "success"); await load(); } catch(e) { pushNotif(e?.message || String(e), "warning"); } finally { setBusy(false); } };
+    const pay = async () => { if (!period) return; setBusy(true); try { const { error } = await sb.rpc("mark_payroll_paid", { p_payroll_id: period.id }); if (error) throw error; pushNotif("Payroll ditandai sudah dibayar.", "success"); await load(); } catch(e) { pushNotif(e?.message || String(e), "warning"); } finally { setBusy(false); } };
+    return React.createElement("div", null,
+      React.createElement("h3", { className: "section-title mt8" }, "Payroll Area"),
+      React.createElement("p", { className: "info-txt" }, "Check-in membentuk gaji terutang. Payroll dihitung, direview, disetujui, lalu dibayar satu kali."),
+      React.createElement("div", { className: "filter-bar mb8" },
+        React.createElement("select", { className: "inp inp-sm", value: areaId, onChange: (e) => setAreaId(e.target.value) }, React.createElement("option", { value: "" }, "-- pilih area --"), areas.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))),
+        React.createElement("input", { type: "month", className: "inp inp-sm", value: bulan, onChange: (e) => setBulan(e.target.value) }),
+        React.createElement("button", { className: "btn-primary btn-sm", disabled: busy, onClick: hitung }, busy ? "Memproses..." : "Hitung Payroll")
+      ),
+      period && React.createElement("div", { className: "kpi-grid mt8" },
+        React.createElement("div", { className: "kpi-card" }, React.createElement("div", { className: "kpi-label" }, "Status"), React.createElement("div", { className: "kpi-val" }, period.status)),
+        React.createElement("div", { className: "kpi-card kpi-peng" }, React.createElement("div", { className: "kpi-label" }, "Total Payroll"), React.createElement("div", { className: "kpi-val" }, fmtRp(period.total)))
+      ),
+      period && React.createElement("div", { className: "row-wrap mt8" },
+        period.status === "draft" && React.createElement("button", { className: "btn-primary btn-sm", disabled: busy, onClick: approve }, "Approve Payroll"),
+        period.status === "approved" && React.createElement("button", { className: "btn-primary btn-sm", disabled: busy, onClick: pay }, "Tandai Sudah Dibayar")
+      ),
+      React.createElement("div", { className: "tbl-wrap mt8" },
+        React.createElement("table", { className: "tbl" },
+          React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Pekerja"), React.createElement("th", null, "Role"), React.createElement("th", null, "Hadir"), React.createElement("th", null, "Gaji/Hari"), React.createElement("th", null, "Jumlah"), React.createElement("th", null, "Status"))),
+          React.createElement("tbody", null, lines.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 6 }, "Belum ada payroll untuk area/bulan ini.")) : lines.map((l) => React.createElement("tr", { key: l.id }, React.createElement("td", null, l.user_id), React.createElement("td", null, l.role), React.createElement("td", null, l.hadir), React.createElement("td", null, fmtRp(l.gaji_harian)), React.createElement("td", null, fmtRp(l.jumlah)), React.createElement("td", null, l.status))))
+        )
+      )
+    );
+  }
+
+
+  // ─── SettingAccounting — trial balance and accounting overview ───────────
+  function SettingAccounting({ pushNotif }) {
+    const tick = useStoreTick();
+    const [rows, setRows] = useState([]);
+    const [journals, setJournals] = useState([]);
+    const [income, setIncome] = useState([]);
+    const [balance, setBalance] = useState([]);
+    const [cashFlow, setCashFlow] = useState([]);
+    const [areas, setAreas] = useState([]);
+    const [areaId, setAreaId] = useState("");
+    const [from, setFrom] = useState(today().slice(0,7) + "-01");
+    const [to, setTo] = useState(today());
+    const [summary, setSummary] = useState(null);
+    const [reconciliation, setReconciliation] = useState(null);
+    const [periodRow, setPeriodRow] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const load = async () => {
+      setBusy(true);
+      const areaRes = await sb.from("operational_areas").select("id,name").eq("active", true).order("name");
+      if (!areaRes.error) setAreas(areaRes.data || []);
+      try {
+        const { data, error } = await sb.from("trial_balance").select("*").order("code");
+        if (error) throw error;
+        setRows(data || []);
+        const j = await sb.from("journal_entries").select("*").order("entry_date", { ascending: false }).limit(100);
+        if (!j.error) setJournals(j.data || []);
+        const [isr, bsr, cfr] = await Promise.all([
+          sb.from("income_statement").select("*").order("code"),
+          sb.from("balance_sheet").select("*").order("code"),
+          sb.from("cash_flow_summary").select("*").order("code")
+        ]);
+        if (!isr.error) setIncome(isr.data || []);
+        if (!bsr.error) setBalance(bsr.data || []);
+        if (!cfr.error) setCashFlow(cfr.data || []);
+        const sm = await sb.rpc("get_financial_summary", { p_from: from, p_to: to, p_area_id: areaId || null });
+        if (!sm.error) setSummary(sm.data?.[0] || null);
+        const rc = await sb.from("operational_accounting_reconciliation").select("*").maybeSingle();
+        if (!rc.error) setReconciliation(rc.data || null);
+        const pr = await sb.from("accounting_periods").select("*").eq("period", String(from).slice(0, 7)).maybeSingle();
+        if (!pr.error) setPeriodRow(pr.data || null);
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+      finally { setBusy(false); }
+    };
+    useEffect(() => { load(); }, [tick, from, to, areaId]);
+    const postPending = async () => {
+      setBusy(true);
+      try {
+        const tx = await sb.from("transactions").select("id");
+        if (tx.error) throw tx.error;
+        const purchases = await sb.from("material_purchases").select("id").eq("status", "received");
+        if (purchases.error) throw purchases.error;
+        const payroll = await sb.from("payroll_periods").select("id").in("status", ["approved", "paid"]);
+        if (payroll.error) throw payroll.error;
+        let n = 0;
+        for (const r of (tx.data || [])) { const x = await sb.rpc("post_sale_journal", { p_transaction_id: r.id }); if (x.error) throw x.error; n++; }
+        for (const r of (purchases.data || [])) { const x = await sb.rpc("post_material_purchase_journal", { p_purchase_id: r.id }); if (x.error) throw x.error; n++; }
+        for (const r of (payroll.data || [])) { const x = await sb.rpc("post_payroll_journal", { p_payroll_id: r.id }); if (x.error) throw x.error; n++; }
+        await load();
+        pushNotif(n + " sumber transaksi diproses ke jurnal. Entri yang sudah ada tidak digandakan.", "success");
+      } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+      finally { setBusy(false); }
+    };
+    const closePeriod = async () => {
+      const period = String(from).slice(0, 7);
+      try { const { error } = await sb.rpc("close_accounting_period", { p_period: period }); if (error) throw error; pushNotif("Periode " + period + " ditutup.", "success"); await load(); } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+    };
+    const reopenPeriod = async () => {
+      const period = String(from).slice(0, 7);
+      const reason = prompt("Alasan membuka kembali periode " + period + ":", "");
+      if (!reason || !reason.trim()) { pushNotif("Alasan wajib diisi.", "warning"); return; }
+      try { const { error } = await sb.rpc("reopen_accounting_period", { p_period: period, p_reason: reason.trim() }); if (error) throw error; pushNotif("Periode " + period + " dibuka kembali.", "warning"); await load(); } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+    };
+    const exportAccounting = () => {
+      if (typeof XLSX === "undefined") { pushNotif("Library Excel belum termuat.", "warning"); return; }
+      const wb = XLSX.utils.book_new();
+      const summaryRows = [["Laporan Keuangan Evora Donuts"],["Periode", from + " s/d " + to],["Area", areaId || "Semua area"],[],["Pendapatan", summary?.revenue || 0],["HPP", summary?.cost_of_sales || 0],["Beban", summary?.expenses || 0],["Laba Bersih", summary?.net_profit || 0],["Selisih Debit-Kredit", (summary?.debit_total || 0) - (summary?.credit_total || 0)]];
+      XLSX.utils.book_append_sheet(wb, styledSummarySheet(summaryRows, [4,5,6,7,8]), "Ringkasan");
+      XLSX.utils.book_append_sheet(wb, styledJsonSheet(rows), "Trial Balance");
+      XLSX.utils.book_append_sheet(wb, styledJsonSheet(income), "Laba Rugi");
+      XLSX.utils.book_append_sheet(wb, styledJsonSheet(balance), "Neraca");
+      XLSX.utils.book_append_sheet(wb, styledJsonSheet(cashFlow), "Arus Kas");
+      XLSX.utils.book_append_sheet(wb, styledJsonSheet(journals), "Jurnal");
+      XLSX.writeFile(wb, "Evora-Laporan-Keuangan-" + String(from).slice(0,7) + ".xlsx");
+      pushNotif("Excel laporan keuangan diunduh.", "success");
+    };
+    const debit = rows.reduce((a, r) => a + (Number(r.debit) || 0), 0);
+    const credit = rows.reduce((a, r) => a + (Number(r.credit) || 0), 0);
+    return React.createElement("div", null,
+      React.createElement("h3", { className: "section-title mt8" }, "Akuntansi"),
+      React.createElement("p", { className: "info-txt" }, "Trial Balance hanya menampilkan jurnal yang sudah diposting. Total debit dan kredit wajib sama sebelum laporan formal dibuat."),
+      React.createElement("div", { className: "filter-bar mt8" },
+        React.createElement("input", { type: "date", className: "inp inp-sm", value: from, onChange: (e) => setFrom(e.target.value) }),
+        React.createElement("span", { className: "muted" }, "s/d"),
+        React.createElement("input", { type: "date", className: "inp inp-sm", value: to, onChange: (e) => setTo(e.target.value) }),
+        React.createElement("select", { className: "inp inp-sm", value: areaId, onChange: (e) => setAreaId(e.target.value) }, React.createElement("option", { value: "" }, "Semua area"), areas.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))),
+        React.createElement("span", { className: "pill-badge" }, "Periode: ", periodRow?.status || "open"),
+        periodRow?.status === "closed"
+          ? React.createElement("button", { className: "btn-secondary btn-sm", onClick: reopenPeriod }, "Buka Kunci Periode")
+          : React.createElement("button", { className: "btn-primary btn-sm", onClick: closePeriod }, "Tutup Periode"),
+        React.createElement("button", { className: "btn-secondary btn-sm", onClick: exportAccounting }, "Export Excel")
+      ),
+      summary && React.createElement("div", { className: "kpi-grid mt8" },
+        React.createElement("div", { className: "kpi-card kpi-omzet" }, React.createElement("div", { className: "kpi-label" }, "Pendapatan periode"), React.createElement("div", { className: "kpi-val" }, fmtRp(summary.revenue))),
+        React.createElement("div", { className: "kpi-card kpi-modal" }, React.createElement("div", { className: "kpi-label" }, "HPP periode"), React.createElement("div", { className: "kpi-val" }, fmtRp(summary.cost_of_sales))),
+        React.createElement("div", { className: "kpi-card kpi-peng" }, React.createElement("div", { className: "kpi-label" }, "Beban periode"), React.createElement("div", { className: "kpi-val" }, fmtRp(summary.expenses))),
+        React.createElement("div", { className: "kpi-card kpi-profit" }, React.createElement("div", { className: "kpi-label" }, "Laba bersih"), React.createElement("div", { className: "kpi-val" }, fmtRp(summary.net_profit)))
+      ),
+      reconciliation && React.createElement("div", { className: "card mt8" },
+        React.createElement("h3", null, "Rekonsiliasi Operasional vs Accounting"),
+        React.createElement("p", { className: "info-txt" }, "Perbedaan harus diselidiki sebelum tutup buku. Angka jurnal tidak boleh dianggap benar jika belum cocok dengan sumber operasional."),
+        React.createElement("div", { className: "kpi-grid" },
+          React.createElement("div", { className: "kpi-card" }, React.createElement("div", { className: "kpi-label" }, "Penjualan Operasional"), React.createElement("div", { className: "kpi-val" }, fmtRp(reconciliation.operational_sales))),
+          React.createElement("div", { className: "kpi-card" }, React.createElement("div", { className: "kpi-label" }, "Penjualan Jurnal"), React.createElement("div", { className: "kpi-val" }, fmtRp(reconciliation.journal_sales))),
+          React.createElement("div", { className: "kpi-card " + (Math.abs(Number(reconciliation.sales_difference || 0)) < 0.01 ? "kpi-profit" : "kpi-peng") }, React.createElement("div", { className: "kpi-label" }, "Selisih Penjualan"), React.createElement("div", { className: "kpi-val" }, fmtRp(reconciliation.sales_difference))),
+          React.createElement("div", { className: "kpi-card " + (Math.abs(Number(reconciliation.hpp_difference || 0)) < 0.01 ? "kpi-profit" : "kpi-peng") }, React.createElement("div", { className: "kpi-label" }, "Selisih HPP"), React.createElement("div", { className: "kpi-val" }, fmtRp(reconciliation.hpp_difference)))
+        )
+      ),
+      React.createElement("div", { className: "kpi-grid mt8" },
+        React.createElement("div", { className: "kpi-card" }, React.createElement("div", { className: "kpi-label" }, "Total Debit"), React.createElement("div", { className: "kpi-val" }, fmtRp(debit))),
+        React.createElement("div", { className: "kpi-card" }, React.createElement("div", { className: "kpi-label" }, "Total Kredit"), React.createElement("div", { className: "kpi-val" }, fmtRp(credit))),
+        React.createElement("div", { className: "kpi-card " + (Math.abs(debit-credit) < 0.01 ? "kpi-profit" : "kpi-peng") }, React.createElement("div", { className: "kpi-label" }, "Selisih"), React.createElement("div", { className: "kpi-val" }, fmtRp(debit-credit)))
+      ),
+      React.createElement("div", { className: "row-wrap mt8" },
+        React.createElement("button", { className: "btn-secondary btn-sm", disabled: busy, onClick: load }, busy ? "Memuat..." : "Muat ulang saldo akun"),
+        React.createElement("button", { className: "btn-primary btn-sm", disabled: busy, onClick: postPending }, busy ? "Memproses..." : "Posting transaksi belum dijurnal")
+      ),
+      React.createElement("div", { className: "tbl-wrap mt8" },
+        React.createElement("table", { className: "tbl" },
+          React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Kode"), React.createElement("th", null, "Akun"), React.createElement("th", null, "Jenis"), React.createElement("th", null, "Debit"), React.createElement("th", null, "Kredit"), React.createElement("th", null, "Saldo"))),
+          React.createElement("tbody", null, rows.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 6 }, "Belum ada jurnal diposting.")) : rows.map((r) => React.createElement("tr", { key: r.code }, React.createElement("td", null, r.code), React.createElement("td", null, r.name), React.createElement("td", null, r.account_type), React.createElement("td", null, fmtRp(r.debit)), React.createElement("td", null, fmtRp(r.credit)), React.createElement("td", { style: { color: Number(r.balance) >= 0 ? "var(--green)" : "var(--red)" } }, fmtRp(r.balance)))))
+        )
+      ),
+      React.createElement("h3", { className: "section-title mt12" }, "Laporan Laba Rugi"),
+      React.createElement("div", { className: "tbl-wrap" }, React.createElement("table", { className: "tbl" },
+        React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Akun"), React.createElement("th", null, "Jenis"), React.createElement("th", null, "Nilai"))),
+        React.createElement("tbody", null, income.length ? income.map((r) => React.createElement("tr", { key: r.code }, React.createElement("td", null, r.code, " — ", r.name), React.createElement("td", null, r.account_type), React.createElement("td", null, fmtRp(r.amount)))) : React.createElement("tr", null, React.createElement("td", { colSpan: 3 }, "Belum ada laporan laba rugi.")))
+      )),
+      React.createElement("h3", { className: "section-title mt12" }, "Neraca"),
+      React.createElement("div", { className: "tbl-wrap" }, React.createElement("table", { className: "tbl" },
+        React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Akun"), React.createElement("th", null, "Jenis"), React.createElement("th", null, "Nilai"))),
+        React.createElement("tbody", null, balance.length ? balance.map((r) => React.createElement("tr", { key: r.code }, React.createElement("td", null, r.code, " — ", r.name), React.createElement("td", null, r.account_type), React.createElement("td", null, fmtRp(r.amount)))) : React.createElement("tr", null, React.createElement("td", { colSpan: 3 }, "Belum ada neraca.")))
+      )),
+      React.createElement("h3", { className: "section-title mt12" }, "Arus Kas"),
+      React.createElement("div", { className: "tbl-wrap" }, React.createElement("table", { className: "tbl" },
+        React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Akun Kas/Bank"), React.createElement("th", null, "Perubahan Bersih"))),
+        React.createElement("tbody", null, cashFlow.length ? cashFlow.map((r) => React.createElement("tr", { key: r.code }, React.createElement("td", null, r.code, " — ", r.name), React.createElement("td", null, fmtRp(r.net_cash_change)))) : React.createElement("tr", null, React.createElement("td", { colSpan: 2 }, "Belum ada arus kas.")))
+      )),
+      React.createElement("h3", { className: "section-title mt12" }, "Jurnal Terposting"),
+      React.createElement("div", { className: "tbl-wrap" },
+        React.createElement("table", { className: "tbl" },
+          React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Tanggal"), React.createElement("th", null, "Sumber"), React.createElement("th", null, "Keterangan"), React.createElement("th", null, "Status"))),
+          React.createElement("tbody", null, journals.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 4 }, "Belum ada jurnal terposting.")) : journals.map((j) => React.createElement("tr", { key: j.id }, React.createElement("td", null, j.entry_date), React.createElement("td", null, j.source_type), React.createElement("td", null, j.description), React.createElement("td", null, j.status))) )
+        )
+      )
+    );
+  }
+
+
+  // ─── SettingTax — ringkasan pajak, rate dikonfirmasi akuntan ─────────────
+  function SettingTax({ pushNotif }) {
+    const tick = useStoreTick();
+    const [rows, setRows] = useState([]);
+    const [codes, setCodes] = useState([]);
+    const [period, setPeriod] = useState(today().slice(0, 7));
+    const load = async () => {
+      const r = await sb.from("tax_period_summary").select("*").eq("period", period);
+      if (!r.error) setRows(r.data || []); else pushNotif(r.error.message, "warning");
+      const c = await sb.from("tax_codes").select("*").eq("active", true);
+      if (!c.error) setCodes(c.data || []);
+    };
+    useEffect(() => { load(); }, [tick, period]);
+    return React.createElement("div", null,
+      React.createElement("h3", { className: "section-title mt8" }, "Pajak"),
+      React.createElement("p", { className: "info-txt" }, "Ringkasan pajak harus dikonfirmasi Owner bersama akuntan/konsultan pajak. Rate tidak boleh diasumsikan otomatis."),
+      React.createElement("div", { className: "filter-bar mb8" }, React.createElement("input", { type: "month", className: "inp inp-sm", value: period, onChange: (e) => setPeriod(e.target.value) }), React.createElement("button", { className: "btn-secondary btn-sm", onClick: load }, "Muat ulang")),
+      React.createElement("div", { className: "kpi-grid" }, React.createElement("div", { className: "kpi-card" }, React.createElement("div", { className: "kpi-label" }, "Jenis pajak aktif"), React.createElement("div", { className: "kpi-val" }, codes.length)), React.createElement("div", { className: "kpi-card kpi-peng" }, React.createElement("div", { className: "kpi-label" }, "Total pajak periode"), React.createElement("div", { className: "kpi-val" }, fmtRp(rows.reduce((a, r) => a + Number(r.tax_amount || 0), 0))))),
+      React.createElement("div", { className: "tbl-wrap mt8" }, React.createElement("table", { className: "tbl" }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Jenis"), React.createElement("th", null, "Dasar pengenaan"), React.createElement("th", null, "Pajak"), React.createElement("th", null, "Jumlah record"))), React.createElement("tbody", null, rows.length ? rows.map((r, i) => React.createElement("tr", { key: i }, React.createElement("td", null, r.tax_type), React.createElement("td", null, fmtRp(r.taxable_amount)), React.createElement("td", null, fmtRp(r.tax_amount)), React.createElement("td", null, r.record_count))) : React.createElement("tr", null, React.createElement("td", { colSpan: 4 }, "Belum ada data pajak untuk periode ini.")))) )
+    );
+  }
+
   function OwnerSetting({ stab, setStab, pushNotif, historyMode, onHistoryModeChange, hppFocus, setHppFocus }) {
     // Sub-pengaturan dikelompokkan jadi 4 kategori (lebih mudah dicari)
     const SETTING_GROUPS = [
-      { label: "\uD83C\uDF69 Produk & Menu", items: [
-        { key: "hpp", label: "Donat, glaze & resep", icon: "\uD83C\uDF69" },
-        { key: "paket", label: "Isi box", icon: "\uD83D\uDCE6" },
-        { key: "stok", label: "Stok di toko", icon: "\uD83D\uDCE6" },
+      { label: "\uD83C\uDF69 Produk & HPP", items: [
+        { key: "hpp", label: "Bahan, glaze & topping", icon: "\uD83C\uDF69" },
+        { key: "paket", label: "Paket & ukuran box", icon: "\uD83D\uDCE6" },
+        { key: "stok", label: "Stok donat di lapak", icon: "\uD83D\uDCE6" },
       ]},
       { label: "\uD83C\uDFE2 Bisnis", items: [
+        { key: "area", label: "Area operasional", icon: "\uD83D\uDCCD" },
         { key: "cabang", label: "Cabang", icon: "\uD83C\uDFE2" },
         { key: "investor", label: "Investor", icon: "\uD83E\uDD1D" },
         { key: "branding", label: "Logo toko", icon: "\uD83C\uDFA8" },
@@ -11549,6 +11980,9 @@ function SettingAkun({ pushNotif }) {
       { label: "\uD83D\uDCB0 Keuangan & Gudang", items: [
         { key: "gudang", label: "Gudang bahan", icon: "\uD83C\uDFEC" },
         { key: "belanja", label: "Uang belanja", icon: "\uD83D\uDED2" },
+        { key: "payroll", label: "Payroll", icon: "\uD83D\DCB5" },
+        { key: "accounting", label: "Akuntansi", icon: "\uD83D\DCCA" },
+        { key: "tax", label: "Pajak", icon: "\uD83D\DCC4" },
         { key: "dana", label: "Dana cadangan", icon: "\uD83D\uDEE1\uFE0F" },
         { key: "aruskas", label: "Arus uang", icon: "\uD83D\uDCB8" },
       ]},
@@ -11575,6 +12009,7 @@ function SettingAkun({ pushNotif }) {
       ),
       stab === "hpp"      && React.createElement(SettingHPP, { pushNotif, initialSub: hppFocus === "menu" ? "menu" : hppFocus === "bahan" ? "bahan" : null, onConsumedFocus: () => setHppFocus && setHppFocus(null) }),
       stab === "paket"    && React.createElement(SettingPaket, { pushNotif }),
+      stab === "area"     && React.createElement(SettingAreaOperasional, { pushNotif }),
       stab === "cabang"   && React.createElement(SettingCabang, { pushNotif }),
       stab === "akun"     && React.createElement(SettingAkun, { pushNotif }),
       stab === "investor" && React.createElement(SettingInvestor, { pushNotif }),
@@ -11584,6 +12019,9 @@ function SettingAkun({ pushNotif }) {
       stab === "gudang"   && React.createElement(SettingGudangBahan, { pushNotif, goSetting: setStab }),
       stab === "dana"     && React.createElement(SettingDanaPemeliharaan, { pushNotif }),
       stab === "belanja"  && React.createElement(SettingKasBelanja, { pushNotif, goSetting: setStab }),
+      stab === "payroll"  && React.createElement(SettingPayroll, { pushNotif }),
+      stab === "accounting"  && React.createElement(SettingAccounting, { pushNotif }),
+      stab === "tax"  && React.createElement(SettingTax, { pushNotif }),
       stab === "aruskas"  && React.createElement(SettingArusKasOps, { pushNotif }),
       stab === "diagnostik" && React.createElement(SettingDiagnostik, { pushNotif, goHppMenu: () => { if (setHppFocus) setHppFocus("menu"); setStab("hpp"); } }),
       stab === "data"     && React.createElement(SettingData, { pushNotif })
@@ -11594,12 +12032,21 @@ function SettingAkun({ pushNotif }) {
   function SettingGudangBahan({ pushNotif, goSetting }) {
     const tick = useStoreTick();
     const [modalAwalBahan, setModalAwalBahan] = useState(0);
+    const [areaOptions, setAreaOptions] = useState([]);
+    const [restokAreaId, setRestokAreaId] = useState("");
+    const [restokUnitId, setRestokUnitId] = useState("");
+    useEffect(() => {
+      sb.from("operational_areas").select("id,name").eq("active", true).order("name")
+        .then(({ data }) => setAreaOptions(data || [])).catch(() => setAreaOptions([]));
+    }, [tick]);
     useEffect(() => {
       sb.from("app_settings").select("value").eq("key", "kas_belanja_modal_awal").maybeSingle()
         .then(({ data }) => setModalAwalBahan(Number(data?.value?.jumlah || 0) || 0))
         .catch(() => {});
     }, [tick]);
     const bahan = S.get("bahanPokok") || [];
+    const branches = S.get("branches") || [];
+    const unitOptions = branches.filter((b) => !restokAreaId || b.areaId === restokAreaId);
     const ledger = getStokBahanLedger().slice().sort((a, b) => String(b.ts || b.date).localeCompare(String(a.ts || a.date)));
     const saldoMap = getAllStokBahanSaldoMap();
     const [tab, setTab] = useState("saldo"); // saldo | restok | laporan | mutasi
@@ -11682,6 +12129,7 @@ function SettingAkun({ pushNotif }) {
     /** Restok + belanja 1 form: stok naik + ambil kas belanja (uang aktual) + opsional update HPP master */
     const doRestokBelanja = async () => {
       if (!restok.bahanId) { pushNotif("Pilih bahan.", "warning"); return; }
+      if (!restokAreaId || !restokUnitId) { pushNotif("Pilih Area Operasional dan unit tujuan stok.", "warning"); return; }
       const b = bahan.find((x) => x.id === restok.bahanId);
       if (!b) { pushNotif("Bahan tidak ditemukan.", "warning"); return; }
       const kap = Math.max(parseInt(b.kapasitas || 1) || 1, 1);
@@ -11705,6 +12153,28 @@ function SettingAkun({ pushNotif }) {
         try {
           const tgl = restok.date || today();
           const note = restok.note || ("Belanja " + (b.nama || "bahan"));
+          // Jalur baru: pembelian dan stok masuk dicatat atomic di ledger terstruktur.
+          if (restokAreaId && restokUnitId) {
+            const { error: normalizedError } = await sb.rpc("receive_material_purchase", {
+              p_id: ambilId,
+              p_area_id: restokAreaId,
+              p_branch_id: restokUnitId,
+              p_date: tgl,
+              p_bahan_id: b.id,
+              p_bahan_nama: b.nama,
+              p_amount: bayar,
+              p_quantity_received: qtyYield,
+              p_quantity_usable: qtyYield,
+              p_quantity_damaged: 0,
+              p_unit: b.satuanStok || "gram",
+              p_note: note
+            });
+            if (normalizedError) throw normalizedError;
+            setRestok((f) => ({ ...f, batch: "1", qtyYield: "", jumlahBayar: "", note: "", fotoUrl: "", fotoPath: "" }));
+            pushNotif("Restok diterima: stok unit bertambah dan belanja tercatat.", "success");
+            setTab("laporan");
+            return;
+          }
           // 1) Stok gudang naik (simpan id baris untuk rollback jika belanja gagal)
           await catatStokBahanRows([{
             id: stockRowId,
@@ -11889,10 +12359,10 @@ function SettingAkun({ pushNotif }) {
 
       React.createElement("div", { className: "row-wrap mb8 mt8" },
         [
-          { k: "saldo", l: "Sisa stok" },
-          { k: "restok", l: "Beli bahan (restok)" },
-          { k: "laporan", l: "Laporan belanja vs modal" },
-          { k: "mutasi", l: "Catatan stok / koreksi" }
+          { k: "saldo", l: "Stok tersedia" },
+          { k: "restok", l: "Beli & terima bahan" },
+          { k: "laporan", l: "HPP vs belanja aktual" },
+          { k: "mutasi", l: "Koreksi/mutasi stok" }
         ].map((t) => React.createElement("button", {
           key: t.k, className: "tab" + (tab === t.k ? " active" : ""), onClick: () => setTab(t.k)
         }, t.l))
@@ -11942,9 +12412,21 @@ function SettingAkun({ pushNotif }) {
         React.createElement("div", { className: "form-card mt8" },
           React.createElement("h4", null, "Restok + Uang Belanja (1 form)"),
           React.createElement("p", { className: "info-txt" },
-            "Isi bahan, qty masuk gudang, dan uang yang benar dibayar. ",
-            "Sistem: stok + · kas belanja − (belanja aktual). ",
-            "Tidak menambah pengeluaran owner agar laba tidak double (laba sudah memotong HPP distribusi)."
+            "Isi area/unit tujuan, bahan, jumlah yang diterima, dan harga nota. Stok baru bertambah setelah barang benar-benar diterima."
+          ),
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Area Operasional"),
+            React.createElement("select", { className: "inp", value: restokAreaId, onChange: (e) => { setRestokAreaId(e.target.value); setRestokUnitId(""); } },
+              React.createElement("option", { value: "" }, "-- pilih area --"),
+              areaOptions.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))
+            )
+          ),
+          React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Unit tujuan stok"),
+            React.createElement("select", { className: "inp", value: restokUnitId, onChange: (e) => setRestokUnitId(e.target.value) },
+              React.createElement("option", { value: "" }, "-- pilih CK/lapak --"),
+              unitOptions.map((u) => React.createElement("option", { key: u.id, value: u.id }, u.name))
+            )
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Bahan"),
@@ -13304,11 +13786,8 @@ function SettingAkun({ pushNotif }) {
         const menu = menus.find((m) => m.id === form.menuId);
         const hppPerPcsProduksi = roundHppRp(getMenuHPPBreakdown(menu)?.hppSatuanPerPcs || 0);
         const cekStok = cekStokBahanCukupUntukProduksi(menu, jml);
-        if (cekStok.pakai.length && !cekStok.ok) {
-          const msg = cekStok.kurang.map((k) => k.bahanNama + " (ada " + Number(k.saldo).toLocaleString("id-ID") + ", butuh " + Number(k.butuh).toLocaleString("id-ID") + ")").join("; ");
-          pushNotif("Stok gudang kurang: " + msg + ". Minta owner restok dulu.", "warning");
-          return;
-        }
+        // Validasi final dilakukan oleh submit_production_atomic di database.
+        // Cache lama hanya dipakai untuk membangun daftar bahan yang diperlukan.
         const entry = {
           id: uid(),
           date: safeDate,
@@ -13323,15 +13802,26 @@ function SettingAkun({ pushNotif }) {
           keterangan: form.keterangan.trim(),
           createdBy: me?.user_id || null,
         };
-        S.set("produksiCK", [...(S.get("produksiCK") || []), entry]);
-        try {
-          await catatPemakaianProduksi({
-            produksiId: entry.id, menu, jumlah: jml, date: safeDate,
-            note: entry.keterangan || undefined
-          });
-        } catch (stokErr) {
-          pushNotif("Produksi tersimpan; stok gudang gagal dipotong: " + (stokErr?.message || stokErr), "warning");
-        }
+        const materials = {};
+        (cekStok.pakai || []).forEach((p) => {
+          const bahan = (S.get("bahanPokok") || []).find((x) => x.id === p.bahanId);
+          materials[p.bahanId] = { quantity: Number(p.qty) || 0, unit_cost: getBahanHppPerPcs(bahan) };
+        });
+        const areaId = me?.areaId || branches.find((b) => b.id === branchId)?.areaId || null;
+        const { error: productionError } = await sb.rpc("submit_production_atomic", {
+          p_id: entry.id,
+          p_area_id: areaId,
+          p_branch_id: branchId,
+          p_date: safeDate,
+          p_ts: entry.ts,
+          p_menu_id: entry.menuId,
+          p_menu_nama: entry.menuNama,
+          p_quantity: jml,
+          p_materials: materials,
+          p_hpp_total: entry.hppTotalProduksi
+        });
+        if (productionError) throw productionError;
+        await S.loadKey("produksiCK");
         setForm((f) => ({ ...f, jumlah: "", keterangan: "" }));
         pushNotif("Produksi tercatat!", "success");
       } finally {
@@ -13369,31 +13859,7 @@ function SettingAkun({ pushNotif }) {
         : { id: uid(), user_id: userId, branchId, date: targetDate, checkin_ts: isoForDate(targetDate), checkout_ts: null };
       S.set("absensi", ex ? all.map((a) => a.id === row.id ? row : a) : [...all, row]);
 
-      // ─── Gaji harian CK masuk sebagai pengeluaran milik CABANG CK SENDIRI ───
-      // (branchId terisi, BUKAN null). hitungBiayaCkPerCabang() di seluruh app
-      // mendeteksi biaya CK lewat branchId yang mengarah ke cabang bertipe
-      // central_kitchen, lalu membaginya PROPORSIONAL ke pcs distribusi yang
-      // diterima tiap cabang hari itu. Kalau branchId di sini null, deteksi
-      // itu tidak pernah cocok — gaji CK diam-diam jatuh ke jalur "global murni"
-      // dan dibagi RATA ke semua cabang seperti dulu, bukan proporsional.
-      try {
-        const gajiHarian = getGajiHarianPadaTanggal(userId, targetDate, me?.gajiHarian);
-        if (gajiHarian > 0) {
-          const pOwnerAll = S.get("pengeluaranOwner") || [];
-          const sudahAda = pOwnerAll.find((p) => p.autoGajiUserId === userId && p.date === targetDate);
-          if (!sudahAda) {
-            const namaPekerja = me?.display_name || me?.displayName || me?.email || "Pekerja CK";
-            const { error } = await sb.from("pengeluaranOwner").insert([{
-              id: uid(), date: targetDate, ts: tsForDate(targetDate),
-              keterangan: `Gaji Harian CK - ${namaPekerja}`, jumlah: gajiHarian,
-              kategori: "gaji_kitchen", branchId, branchName,
-              autoGajiUserId: userId, gajiRateDate: targetDate, gajiFromHistori: true
-            }]);
-            if (!error) await S.loadKey("pengeluaranOwner");
-          }
-        }
-      } catch (e) { /* gaji auto-insert gagal, tidak blok proses checkin */ }
-
+      // Check-in hanya membentuk kehadiran/gaji terutang; pembayaran payroll dilakukan terpisah.
       pushNotif("Check-in berhasil!", "success");
     };
 
@@ -13730,6 +14196,7 @@ if (!sb) {
         const jadwalCfg = await syncJadwalLiburFromDb().catch(() => getJadwalLiburLocal());
         S.set("jadwalLibur", jadwalCfg);
         await S.loadAll();
+        await syncNormalizedOperationalState().catch(() => {});
         if (prof.role === "owner") await S.loadKey("profiles").catch(() => {});
         await loadGajiHistoriFromDb().catch(() => {});
         await loadStokBahanFromDb().catch(() => {});

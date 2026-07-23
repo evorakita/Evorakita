@@ -4,7 +4,7 @@
   "private": true,
   "description": "Aplikasi operasional bisnis donat multi-cabang (kasir, distribusi, gudang, gaji, pesanan, shift kas).",
   "scripts": {
-    "test": "node tests/logic.test.js"
+    "test": "node tests/logic.test.js && node tests/flow.test.js"
   },
   "engines": {
     "node": ">=18"
