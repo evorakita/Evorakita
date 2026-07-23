@@ -14,7 +14,7 @@ module.exports = async (req, res) => {
     if (!token) return res.status(401).json({ error: "Butuh Authorization Bearer token." });
 
     const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
-    const { emailOrUsername, password, role, displayName = null, branchId = null, investorId = null } = body;
+    const { emailOrUsername, password, role, displayName = null, branchId = null, investorId = null, areaId = null } = body;
 
     const raw = String(emailOrUsername || "").trim();
     const pwd = String(password || "").trim();
@@ -28,6 +28,7 @@ module.exports = async (req, res) => {
     const email = (raw.includes("@") ? raw : `${raw.toLowerCase()}@evoradonuts.local`).toLowerCase();
     if (finalRole === "worker" && !branchId) return res.status(400).json({ error: "Pilih cabang untuk worker." });
     if (finalRole === "investor" && !investorId) return res.status(400).json({ error: "Pilih investor untuk investor." });
+    if (finalRole === "manager" && !areaId) return res.status(400).json({ error: "Pilih area operasional untuk manager." });
 
     // Validasi token owner
     const userResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
@@ -60,7 +61,7 @@ module.exports = async (req, res) => {
         password: pwd,
         email_confirm: true,
         // Simpan role di kedua tempat agar JWT selalu terbaca
-        user_metadata: { role: finalRole, display_name: displayName || email.split("@")[0] },
+        user_metadata: { role: finalRole, display_name: displayName || email.split("@")[0], areaId: finalRole === "manager" ? areaId : null },
         app_metadata: { role: finalRole },
       }),
     });
@@ -79,6 +80,7 @@ module.exports = async (req, res) => {
       display_name: displayName || email.split("@")[0],
       branchId: finalRole === "worker" ? branchId : null,
       investorId: finalRole === "investor" ? investorId : null,
+      areaId: finalRole === "manager" ? areaId : null,
     };
     const profInsertResp = await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
       method: "POST",
