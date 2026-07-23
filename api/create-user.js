@@ -28,9 +28,9 @@ module.exports = async (req, res) => {
     const email = (raw.includes("@") ? raw : `${raw.toLowerCase()}@evoradonuts.local`).toLowerCase();
     if (finalRole === "worker" && !branchId) return res.status(400).json({ error: "Pilih cabang untuk worker." });
     if (finalRole === "investor" && !investorId) return res.status(400).json({ error: "Pilih investor untuk investor." });
-    if (finalRole === "manager" && !areaId) return res.status(400).json({ error: "Pilih area operasional untuk manager." });
+    // area opsional saat create manager — assign later via Area Operasional
+    // if (finalRole === "manager" && !areaId) return res.status(400).json({ error: "Pilih area operasional untuk manager." });
 
-    // Validasi token owner
     const userResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
       headers: { apikey: ANON, Authorization: `Bearer ${token}` },
     });
@@ -39,7 +39,6 @@ module.exports = async (req, res) => {
     const ownerId = userJson?.id;
     if (!ownerId) return res.status(401).json({ error: "Tidak bisa membaca owner id." });
 
-    // Cek role owner dari profiles
     const profResp = await fetch(
       `${SUPABASE_URL}/rest/v1/profiles?select=role&user_id=eq.${ownerId}&limit=1`,
       { headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` } }
@@ -48,7 +47,6 @@ module.exports = async (req, res) => {
     const ownerRole = Array.isArray(profJson) && profJson[0]?.role;
     if (ownerRole !== "owner") return res.status(403).json({ error: "Hanya owner yang boleh membuat akun." });
 
-    // Buat user auth — SERTAKAN role di user_metadata dan app_metadata
     const createResp = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
       method: "POST",
       headers: {
@@ -60,8 +58,13 @@ module.exports = async (req, res) => {
         email,
         password: pwd,
         email_confirm: true,
-        // Simpan role di kedua tempat agar JWT selalu terbaca
-        user_metadata: { role: finalRole, display_name: displayName || email.split("@")[0], areaId: finalRole === "manager" ? areaId : null },
+        user_metadata: {
+          role: finalRole,
+          display_name: displayName || email.split("@")[0],
+          areaId: finalRole === "manager" ? areaId : null,
+          branchId: finalRole === "worker" ? branchId : null,
+          investorId: finalRole === "investor" ? investorId : null,
+        },
         app_metadata: { role: finalRole },
       }),
     });
@@ -72,7 +75,6 @@ module.exports = async (req, res) => {
     const newUserId = createJson?.id || createJson?.user?.id;
     if (!newUserId) return res.status(400).json({ error: "User dibuat tapi id tidak ditemukan." });
 
-    // Insert/upsert profiles langsung (tidak tunggu trigger)
     const profilePayload = {
       user_id: newUserId,
       email,
@@ -81,6 +83,8 @@ module.exports = async (req, res) => {
       branchId: finalRole === "worker" ? branchId : null,
       investorId: finalRole === "investor" ? investorId : null,
       areaId: finalRole === "manager" ? areaId : null,
+      aktif: true,
+      status: "active",
     };
     const profInsertResp = await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
       method: "POST",
@@ -88,17 +92,15 @@ module.exports = async (req, res) => {
         apikey: SERVICE,
         Authorization: `Bearer ${SERVICE}`,
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=minimal",
+        Prefer: "resolution=merge-duplicates,return=minimal",
       },
       body: JSON.stringify(profilePayload),
     });
     if (!profInsertResp.ok) {
       const errText = await profInsertResp.text();
-      // Jangan gagal total — user sudah terbuat, profiles mungkin ada trigger
       console.warn("profiles insert warning:", errText);
     }
 
-    // Insert invite untuk referensi
     await fetch(`${SUPABASE_URL}/rest/v1/invites`, {
       method: "POST",
       headers: {
@@ -115,7 +117,7 @@ module.exports = async (req, res) => {
         investorId: finalRole === "investor" ? investorId : null,
         created_by: ownerId,
       }),
-    }).catch(() => {}); // invite bukan critical path
+    }).catch(() => {});
 
     return res.json({ ok: true, email, userId: newUserId });
   } catch (e) {
