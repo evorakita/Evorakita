@@ -7989,23 +7989,38 @@ function useConfirm() {
     }, [sub, menus]);
 
     const saveB = () => {
-      if (!nB.nama || !nB.hargaBeli || !nB.kapasitas) { pushNotif("Isi nama, harga beli, dan kapasitas!", "warning"); return; }
+      if (!nB.nama || !nB.hargaBeli) { pushNotif("Isi nama dan harga beli!", "warning"); return; }
+      const hargaBeli = parseFloat(nB.hargaBeli) || 0;
       const isiBeli = Number(nB.isiBeli) || 0;
-      const takaranPerPcs = Number(nB.takaranPerPcs) || 0;
-      const yieldPcs = isiBeli > 0 && takaranPerPcs > 0 ? isiBeli / takaranPerPcs : (parseInt(nB.kapasitas) || 0);
-      if (yieldPcs <= 0) { pushNotif("Isi pembelian + takaran per donat, atau isi yield lama.", "warning"); return; }
-      const hppPerPcs = getBahanHppPerPcs({ hargaBeli: parseFloat(nB.hargaBeli), isiBeli, takaranPerPcs, kapasitas: yieldPcs });
+      // Cara warung: isi "jadi berapa pcs donat" (kapasitas). Takaran gram dihitung otomatis.
+      let yieldPcs = Number(nB.kapasitas) || 0;
+      let takaranPerPcs = Number(nB.takaranPerPcs) || 0;
+      if (yieldPcs <= 0 && isiBeli > 0 && takaranPerPcs > 0) yieldPcs = isiBeli / takaranPerPcs;
+      if (yieldPcs <= 0) { pushNotif("Isi: dari 1 kemasan ini jadi berapa pcs donat?", "warning"); return; }
+      if (isiBeli > 0 && yieldPcs > 0) takaranPerPcs = isiBeli / yieldPcs;
+      const hppPerPcs = getBahanHppPerPcs({ hargaBeli, isiBeli, takaranPerPcs, kapasitas: yieldPcs });
+      const row = {
+        nama: nB.nama,
+        hargaBeli,
+        isiBeli: isiBeli || null,
+        satuanStok: nB.satuanStok || "gram",
+        takaranPerPcs: takaranPerPcs || null,
+        kapasitas: yieldPcs,
+        satuanBeli: nB.satuanBeli || "",
+        satuan: nB.satuanBeli || nB.satuanStok || "gram",
+        hppPerPcs: roundHppRp(hppPerPcs)
+      };
       if (nB.editId) {
-        const u = bahan.map((x) => x.id === nB.editId ? { ...x, nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), isiBeli: isiBeli || null, satuanStok: nB.satuanStok || "gram", takaranPerPcs: takaranPerPcs || null, kapasitas: yieldPcs, satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || nB.satuanStok || "gram", hppPerPcs: roundHppRp(hppPerPcs) } : x);
+        const u = bahan.map((x) => x.id === nB.editId ? { ...x, ...row } : x);
         S.set("bahanPokok", u); setBahan(u);
         setNB({ nama: "", hargaBeli: "", isiBeli: "", satuanStok: "gram", takaranPerPcs: "", kapasitas: "", satuanBeli: "" });
-        pushNotif("Bahan diperbarui! HPP menu yang memakainya ikut ter-update.", "success");
+        pushNotif("Bahan diperbarui! HPP/pcs = " + fmtRp(row.hppPerPcs), "success");
         return;
       }
-      const u = [...bahan, { id: uid(), nama: nB.nama, hargaBeli: parseFloat(nB.hargaBeli), isiBeli: isiBeli || null, satuanStok: nB.satuanStok || "gram", takaranPerPcs: takaranPerPcs || null, kapasitas: yieldPcs, satuanBeli: nB.satuanBeli || "", satuan: nB.satuanBeli || nB.satuanStok || "gram", hppPerPcs: roundHppRp(hppPerPcs) }];
+      const u = [...bahan, { id: uid(), ...row }];
       S.set("bahanPokok", u); setBahan(u);
       setNB({ nama: "", hargaBeli: "", isiBeli: "", satuanStok: "gram", takaranPerPcs: "", kapasitas: "", satuanBeli: "" });
-      pushNotif("Bahan ditambah!", "success");
+      pushNotif("Bahan ditambah! HPP/pcs = " + fmtRp(row.hppPerPcs), "success");
     };
     const editB = (b) => { setNB({ editId: b.id, nama: b.nama, hargaBeli: String(b.hargaBeli), isiBeli: b.isiBeli != null ? String(b.isiBeli) : "", satuanStok: b.satuanStok || "gram", takaranPerPcs: b.takaranPerPcs != null ? String(b.takaranPerPcs) : "", kapasitas: String(b.kapasitas || ""), satuanBeli: b.satuanBeli || "" }); };
 
@@ -8100,7 +8115,7 @@ function useConfirm() {
       // ── Sub: Bahan Pokok ──
       sub === "bahan" && React.createElement("div", null,
         React.createElement("h3", { className: "section-title mt8" }, "Bahan Dasar Donat"),
-        React.createElement("p", { className: "info-txt" }, "Masukkan total harga beli dan hasil jadi (kapasitas/yield). Contoh: Tepung 1kg Rp 10.000 → 10 pcs adonan → HPP/pcs = Rp 1.000."),
+        React.createElement("p", { className: "info-txt" }, "Cara isi gampang: harga beli kemasan + dari kemasan itu jadi berapa pcs donat. App hitung HPP/pcs (dan gram/pcs bila isi kemasan diisi)."),
         React.createElement("table", { className: "tbl mt8" },
           React.createElement("thead", null,
             React.createElement("tr", null,
@@ -8134,22 +8149,53 @@ function useConfirm() {
             React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 10000", value: nB.hargaBeli, onChange: (e) => setNB((x) => ({ ...x, hargaBeli: e.target.value })) })
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Isi pembelian (dalam satuan stok)"),
-            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 1000", value: nB.isiBeli, onChange: (e) => setNB((x) => ({ ...x, isiBeli: e.target.value })) }),
-            React.createElement("select", { className: "inp inp-sm", value: nB.satuanStok, onChange: (e) => setNB((x) => ({ ...x, satuanStok: e.target.value })) },
-              React.createElement("option", { value: "gram" }, "Gram"),
-              React.createElement("option", { value: "ml" }, "ml"),
-              React.createElement("option", { value: "pcs" }, "Pcs")
-            )
+            React.createElement("label", null, "Dari 1 kemasan ini jadi berapa pcs donat?"),
+            React.createElement("input", { className: "inp", type: "number", min: "1", step: "1", placeholder: "Contoh: 20 (1 kg tepung = 20 donat)", value: nB.kapasitas, onChange: (e) => setNB((x) => ({ ...x, kapasitas: e.target.value })) }),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Ini yang paling penting. Contoh: beli tepung 1 kg, adonan jadi 20 donat → isi 20. App hitung HPP sendiri.")
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Takaran per 1 donat"),
-            React.createElement("input", { className: "inp", type: "number", step: "0.001", placeholder: "Contoh: 14.93", value: nB.takaranPerPcs, onChange: (e) => setNB((x) => ({ ...x, takaranPerPcs: e.target.value })) }),
-            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Contoh: 14,93 gram kentang untuk 1 donat. Yield dihitung otomatis dari isi pembelian ÷ takaran.")
+            React.createElement("label", null, "Isi kemasan (opsional — biar ketahuan gram/donat)"),
+            React.createElement("div", { className: "row-wrap", style: { gap: 8 } },
+              React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 1000", value: nB.isiBeli, onChange: (e) => setNB((x) => ({ ...x, isiBeli: e.target.value })), style: { flex: 1 } }),
+              React.createElement("select", { className: "inp inp-sm", value: nB.satuanStok, onChange: (e) => setNB((x) => ({ ...x, satuanStok: e.target.value })), style: { width: 110 } },
+                React.createElement("option", { value: "gram" }, "Gram"),
+                React.createElement("option", { value: "ml" }, "ml"),
+                React.createElement("option", { value: "pcs" }, "Pcs")
+              )
+            ),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Opsional. Tepung 1 kg → 1000 gram. Kalau diisi, app tampilkan gram per donat otomatis.")
           ),
-          nB.hargaBeli && nB.isiBeli && nB.takaranPerPcs && React.createElement("div", { className: "hpp-preview" },
-            "Yield otomatis: ", React.createElement("strong", null, (Number(nB.isiBeli) / Math.max(Number(nB.takaranPerPcs), 0.000001)).toFixed(2), " pcs"),
-            " | HPP per donat = ", React.createElement("strong", null, fmtRp(roundHppRp((Number(nB.hargaBeli) / Number(nB.isiBeli)) * Number(nB.takaranPerPcs))))
+          React.createElement("div", {
+            className: "hpp-preview",
+            style: {
+              borderColor: (nB.hargaBeli && nB.kapasitas && Number(nB.kapasitas) > 0) ? "var(--accent)" : "var(--border)",
+              background: (nB.hargaBeli && nB.kapasitas && Number(nB.kapasitas) > 0)
+                ? "color-mix(in srgb, var(--accent) 14%, var(--bg2))"
+                : "var(--bg3)"
+            }
+          },
+            React.createElement("div", { style: { fontWeight: 800, color: "var(--text)", marginBottom: 6, fontSize: 13 } }, "Hasil hitung otomatis"),
+            !(nB.hargaBeli && nB.kapasitas && Number(nB.kapasitas) > 0)
+              ? React.createElement("div", { style: { fontSize: 12, lineHeight: 1.55 } },
+                  "Isi ", React.createElement("strong", null, "harga beli"), " dan ",
+                  React.createElement("strong", null, "jadi berapa pcs donat"),
+                  ". HPP per donat muncul di sini."
+                )
+              : React.createElement("div", { style: { fontSize: 13, lineHeight: 1.75 } },
+                  React.createElement("div", null, "HPP bahan ini / donat = ",
+                    React.createElement("strong", { style: { fontSize: 18 } },
+                      fmtRp(roundHppRp(Number(nB.hargaBeli) / Number(nB.kapasitas)))
+                    )
+                  ),
+                  (nB.isiBeli && Number(nB.isiBeli) > 0)
+                    ? React.createElement("div", null, "Setara ",
+                        React.createElement("strong", null,
+                          (Number(nB.isiBeli) / Number(nB.kapasitas)).toFixed(2), " ", (nB.satuanStok || "gram"), " per donat"
+                        )
+                      )
+                    : React.createElement("div", { style: { fontSize: 11, opacity: 0.9 } }, "Isi kemasan (opsional) untuk lihat gram/ml per donat."),
+                  React.createElement("div", { style: { fontSize: 11, opacity: 0.85 } }, "Rumus HPP: harga beli ÷ jumlah pcs donat. Ini BIAYA bahan, bukan harga jual.")
+                )
           ),
           React.createElement("div", { className: "row-wrap mt8" },
             React.createElement("button", { className: "btn-primary", onClick: saveB }, nB.editId ? "Simpan Perubahan" : "+ Tambah Bahan"),
