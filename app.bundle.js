@@ -8054,25 +8054,43 @@ function useConfirm() {
     const askDelMenu = (m) => confirmAsk({ title: "Hapus Menu", message: `Yakin hapus menu "${m.nama}"?`, onConfirm: () => delMenu(m.id) });
 
     const saveT = () => {
-      if (!nT.nama || !nT.hargaBeli || !nT.isiPerBeli || !nT.porsiPerPcs) { pushNotif("Isi nama, harga beli, isi pembelian, dan takaran per donat!", "warning"); return; }
+      if (!nT.nama || !nT.hargaBeli) { pushNotif("Isi nama dan harga beli!", "warning"); return; }
+      const hargaBeli = parseFloat(nT.hargaBeli) || 0;
       const isiPerBeli = parseFloat(nT.isiPerBeli) || 0;
-      const hargaBeli = parseFloat(nT.hargaBeli);
-      // Harga per satuan stok (mis. Rp/gram) untuk menilai opname; kalau isiPerBeli kosong, biarkan null
-      const hargaPerSatuan = isiPerBeli > 0 ? (hargaBeli / isiPerBeli) : null;
-      const porsiPerPcs = parseFloat(nT.porsiPerPcs) || 0;
-      const kapasitas = isiPerBeli > 0 && porsiPerPcs > 0 ? isiPerBeli / porsiPerPcs : (parseInt(nT.kapasitas) || 1);
-      const fields = { nama: nT.nama, hargaBeli, kapasitas, hargaJual: parseFloat(nT.hargaJual) || 0, satuanStok: nT.satuanStok || "gram", isiPerBeli: isiPerBeli || null, hargaPerSatuan, jenis: nT.jenis || "topping", porsiPerPcs };
+      // Cara warung: "1 kemasan cukup untuk berapa donat?" (kapasitas pcs)
+      let kapasitas = parseFloat(nT.kapasitas) || 0;
+      let porsiPerPcs = parseFloat(nT.porsiPerPcs) || 0;
+      if (kapasitas <= 0 && isiPerBeli > 0 && porsiPerPcs > 0) kapasitas = isiPerBeli / porsiPerPcs;
+      if (kapasitas <= 0) { pushNotif("Isi: 1 kemasan ini cukup untuk berapa pcs donat?", "warning"); return; }
+      if (isiPerBeli > 0 && kapasitas > 0) porsiPerPcs = isiPerBeli / kapasitas;
+      const hargaPerSatuan = isiPerBeli > 0 ? (hargaBeli / isiPerBeli) : (kapasitas > 0 ? hargaBeli / kapasitas : null);
+      const hargaJual = nT.jenis === "glaze" ? 0 : (parseFloat(nT.hargaJual) || 0);
+      if (nT.jenis === "topping" && !nT.hargaJual && hargaJual === 0) {
+        /* boleh 0 tapi ingatkan */
+      }
+      const fields = {
+        nama: nT.nama,
+        hargaBeli,
+        kapasitas,
+        hargaJual,
+        satuanStok: nT.satuanStok || "gram",
+        isiPerBeli: isiPerBeli || null,
+        hargaPerSatuan,
+        jenis: nT.jenis || "topping",
+        porsiPerPcs: porsiPerPcs || null
+      };
+      const hppShow = roundHppRp(hargaBeli / kapasitas);
       if (nT.editId) {
         const u = topings.map((x) => x.id === nT.editId ? { ...x, ...fields } : x);
         S.set("topingTambahan", u); setTopings(u);
-        setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" });
-        pushNotif((fields.jenis === "glaze" ? "Glaze" : "Toping") + " diperbarui!", "success");
+        setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: nT.jenis || "topping", porsiPerPcs: "" });
+        pushNotif((fields.jenis === "glaze" ? "Glaze" : "Toping") + " diperbarui! HPP/pcs = " + fmtRp(hppShow), "success");
         return;
       }
       const u = [...topings, { id: uid(), ...fields }];
       S.set("topingTambahan", u); setTopings(u);
-      setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: "topping", porsiPerPcs: "" });
-      pushNotif((nT.jenis === "glaze" ? "Glaze" : "Toping") + " ditambah!", "success");
+      setNT({ nama: "", hargaBeli: "", kapasitas: "", hargaJual: "", satuanStok: "gram", isiPerBeli: "", jenis: nT.jenis || "topping", porsiPerPcs: "" });
+      pushNotif((fields.jenis === "glaze" ? "Glaze" : "Toping") + " ditambah! HPP/pcs = " + fmtRp(hppShow), "success");
     };
 
     const delT = (id) => { const u = topings.filter((x) => x.id !== id); S.set("topingTambahan", u); setTopings(u); pushNotif("Toping dihapus.", "warning"); };
@@ -8327,7 +8345,7 @@ function useConfirm() {
       // ── Sub: Glaze & Topping ──
       sub === "toping" && React.createElement("div", null,
         React.createElement("h3", { className: "section-title mt8" }, "Topping"),
-        React.createElement("p", { className: "info-txt" }, "HPP toping dihitung dari: Harga Beli Toping ÷ Kapasitas (jadi berapa pcs). Contoh: Glaze 1kg Rp 40.000 → 10 pcs → HPP = Rp 4.000/pcs."),
+        React.createElement("p", { className: "info-txt" }, "Cara gampang: harga beli kemasan + kemasan itu cukup untuk berapa donat. App hitung HPP/pcs. Isi gram opsional."),
         React.createElement("table", { className: "tbl mt8" },
           React.createElement("thead", null,
             React.createElement("tr", null,
@@ -8371,45 +8389,68 @@ function useConfirm() {
               : "Toping tambahan = ekstra opsional yang pelanggan minta (kena biaya tambahan).")
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, (nT.jenis === "glaze" ? "Nama Glaze" : "Nama Toping") + " & Ukuran Beli"),
-            React.createElement("input", { className: "inp inp-sm", placeholder: nT.jenis === "glaze" ? "Contoh: Glaze Coklat 1kg" : "Contoh: Meses 1kg", value: nT.nama, onChange: (e) => setNT((x) => ({ ...x, nama: e.target.value })) })
+            React.createElement("label", null, nT.jenis === "glaze" ? "Nama glaze" : "Nama toping"),
+            React.createElement("input", { className: "inp", placeholder: nT.jenis === "glaze" ? "Contoh: Coklat" : "Contoh: Meses / Keju", value: nT.nama, onChange: (e) => setNT((x) => ({ ...x, nama: e.target.value })) })
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Takaran per donat (dalam satuan stok)"),
-            React.createElement("input", { className: "inp inp-sm", type: "number", step: "0.001", placeholder: "Contoh: 5 (=5 gram/donat)", value: nT.porsiPerPcs, onChange: (e) => setNT((x) => ({ ...x, porsiPerPcs: e.target.value })) }),
-            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Dipakai untuk menghitung HPP dan stok setiap glaze/topping yang dipilih pembeli.")
+            React.createElement("label", null, "Harga beli 1 kemasan (Rp)"),
+            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 40000", value: nT.hargaBeli, onChange: (e) => setNT((x) => ({ ...x, hargaBeli: e.target.value })) })
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Harga Beli Total (Rp)"),
-            React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Contoh: 40000", value: nT.hargaBeli, onChange: (e) => setNT((x) => ({ ...x, hargaBeli: e.target.value })) })
+            React.createElement("label", null, "1 kemasan ini cukup untuk berapa pcs donat?"),
+            React.createElement("input", { className: "inp", type: "number", min: "1", step: "1", placeholder: "Contoh: 100 (1 kg glaze ≈ 100 donat)", value: nT.kapasitas, onChange: (e) => setNT((x) => ({ ...x, kapasitas: e.target.value })) }),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Perkiraan dapur saja. App hitung HPP per donat = harga beli ÷ angka ini.")
           ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Yield otomatis"),
-            React.createElement("div", { className: "info-txt" }, nT.isiPerBeli && nT.porsiPerPcs ? (Number(nT.isiPerBeli) / Math.max(Number(nT.porsiPerPcs), 0.000001)).toFixed(2) + " takaran" : "Isi pembelian dan takaran untuk menghitung yield."),
+            React.createElement("label", null, "Isi kemasan (opsional)"),
+            React.createElement("div", { className: "row-wrap", style: { gap: 8 } },
+              React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 1000", value: nT.isiPerBeli, onChange: (e) => setNT((x) => ({ ...x, isiPerBeli: e.target.value })), style: { flex: 1 } }),
+              React.createElement("select", { className: "inp inp-sm", value: nT.satuanStok, onChange: (e) => setNT((x) => ({ ...x, satuanStok: e.target.value })), style: { width: 120 } },
+                React.createElement("option", { value: "gram" }, "Gram"),
+                React.createElement("option", { value: "ml" }, "ml"),
+                React.createElement("option", { value: "pcs" }, "Pcs")
+              )
+            ),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Opsional. 1 kg → 1000 gram. Supaya app bisa tampilkan gram per donat.")
           ),
-          React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Satuan Stok (untuk opname)"),
-            React.createElement("select", { className: "inp inp-sm", value: nT.satuanStok, onChange: (e) => setNT((x) => ({ ...x, satuanStok: e.target.value })) },
-              React.createElement("option", { value: "gram" }, "Gram (ditimbang)"),
-              React.createElement("option", { value: "ml" }, "ml (cairan)"),
-              React.createElement("option", { value: "wadah" }, "Wadah / toples"),
-              React.createElement("option", { value: "bungkus" }, "Bungkus / sachet"),
-              React.createElement("option", { value: "botol" }, "Botol"),
-              React.createElement("option", { value: "pcs" }, "Pcs / buah")
-            )
+          nT.jenis === "topping" && React.createElement("div", { className: "field-group" },
+            React.createElement("label", null, "Harga jual ke pembeli (Rp) — hanya toping tambahan"),
+            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 2000 (biaya ekstra di kasir)", value: nT.hargaJual, onChange: (e) => setNT((x) => ({ ...x, hargaJual: e.target.value })) }),
+            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Glaze biasanya gratis (harga donat sudah flat). Toping ekstra bisa dikenai biaya.")
           ),
-          React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Isi per Beli (dalam satuan stok)"),
-            React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Contoh: 1000 (=1kg dalam gram)", value: nT.isiPerBeli, onChange: (e) => setNT((x) => ({ ...x, isiPerBeli: e.target.value })) }),
-            React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Berapa " + (nT.satuanStok || "gram") + " yang didapat dari 1x harga beli. Dipakai untuk menghitung nilai Rp toping terpakai saat opname.")
-          ),
-          React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Harga Jual per Toping (Rp)"),
-            React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Contoh: 10000", value: nT.hargaJual, onChange: (e) => setNT((x) => ({ ...x, hargaJual: e.target.value })) })
-          ),
-          nT.hargaBeli && nT.kapasitas && React.createElement("div", { className: "hpp-preview" },
-            "HPP/pcs = ", React.createElement("strong", null, fmtRp(roundHppRp(parseFloat(nT.hargaBeli || 0) / Math.max(parseInt(nT.kapasitas || 1), 1)))),
-            " | Omzet Kotor = ", React.createElement("strong", { style: { color: "var(--green)" } }, fmtRp(Math.max(parseFloat(nT.hargaJual || 0) - roundHppRp(parseFloat(nT.hargaBeli || 0) / Math.max(parseInt(nT.kapasitas || 1), 1)), 0)))
+          React.createElement("div", {
+            className: "hpp-preview",
+            style: {
+              borderColor: (nT.hargaBeli && nT.kapasitas && Number(nT.kapasitas) > 0) ? "var(--accent)" : "var(--border)",
+              background: (nT.hargaBeli && nT.kapasitas && Number(nT.kapasitas) > 0)
+                ? "color-mix(in srgb, var(--accent) 14%, var(--bg2))"
+                : "var(--bg3)"
+            }
+          },
+            React.createElement("div", { style: { fontWeight: 800, color: "var(--text)", marginBottom: 6, fontSize: 13 } }, "Hasil hitung otomatis"),
+            !(nT.hargaBeli && nT.kapasitas && Number(nT.kapasitas) > 0)
+              ? React.createElement("div", { style: { fontSize: 12, lineHeight: 1.55 } },
+                  "Isi harga beli + berapa pcs donat per kemasan. HPP muncul di sini."
+                )
+              : React.createElement("div", { style: { fontSize: 13, lineHeight: 1.75 } },
+                  React.createElement("div", null, "HPP / donat = ",
+                    React.createElement("strong", { style: { fontSize: 18 } },
+                      fmtRp(roundHppRp(Number(nT.hargaBeli) / Number(nT.kapasitas)))
+                    )
+                  ),
+                  (nT.isiPerBeli && Number(nT.isiPerBeli) > 0)
+                    ? React.createElement("div", null, "Setara ",
+                        React.createElement("strong", null,
+                          (Number(nT.isiPerBeli) / Number(nT.kapasitas)).toFixed(2), " ", (nT.satuanStok || "gram"), " per donat"
+                        )
+                      )
+                    : null,
+                  React.createElement("div", { style: { fontSize: 11, opacity: 0.85 } },
+                    nT.jenis === "glaze"
+                      ? "Glaze: biaya modal saja (biasanya tidak ditambah di kasir)."
+                      : "Toping: HPP = modal; harga jual = yang dibayar pembeli kalau pilih ekstra."
+                  )
+                )
           ),
           React.createElement("div", { className: "row-wrap mt8" },
             React.createElement("button", { className: "btn-primary", onClick: saveT }, nT.editId ? "Simpan Perubahan" : (nT.jenis === "glaze" ? "+ Tambah Glaze" : "+ Tambah Toping")),
