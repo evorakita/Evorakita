@@ -8856,7 +8856,8 @@ function SettingAkun({ pushNotif }) {
     if (!["worker", "investor", "owner", "manager", "distribusi"].includes(form.role)) errors.role = "Role akun tidak valid.";
 
     if (form.role === "manager") {
-      if (!form.areaId) errors.areaId = "Pilih Area Operasional untuk Manager.";
+      // areaId manager opsional saat buat akun — bisa di-assign lewat Area Operasional nanti.
+      // if (!form.areaId) errors.areaId = "Pilih Area Operasional untuk Manager.";
     }
 
     if (form.role === "worker") {
@@ -8910,7 +8911,7 @@ function SettingAkun({ pushNotif }) {
       : "";
     const managerAreaLabel = form.role === "manager" ? (areaOptions.find((a) => a.id === form.areaId)?.name || form.areaId) : "";
     const summary = [
-      `Role: ${form.role === "worker" ? "Pekerja" : form.role === "distribusi" ? "Kurir/Distribusi" : form.role === "investor" ? "Investor" : form.role === "manager" ? "Area Manager" : "Owner"}`,
+      `Role: ${form.role === "worker" ? "Pekerja" : form.role === "distribusi" ? "Kurir/Distribusi" : form.role === "investor" ? "Investor" : form.role === "manager" ? "Area Manager (opsional)" : "Owner"}`,
       `Login: ${validation.normalizedEmail}`,
       validation.displayName ? `Nama tampilan: ${validation.displayName}` : null,
       branchLabel ? `Cabang: ${branchLabel}` : null,
@@ -9090,7 +9091,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("div", { className: "role-tabs" },
           React.createElement("button", { type: "button", disabled: !!actionBusy, className: "role-tab" + (form.role === "worker" ? " active" : ""), onClick: () => setRoleForm("worker") }, "Pekerja"),
           React.createElement("button", { type: "button", disabled: !!actionBusy, className: "role-tab" + (form.role === "distribusi" ? " active" : ""), onClick: () => setRoleForm("distribusi") }, "Kurir/Distribusi"),
-          React.createElement("button", { type: "button", disabled: !!actionBusy, className: "role-tab" + (form.role === "manager" ? " active" : ""), onClick: () => setRoleForm("manager") }, "Area Manager"),
+          React.createElement("button", { type: "button", disabled: !!actionBusy, className: "role-tab" + (form.role === "manager" ? " active" : ""), onClick: () => setRoleForm("manager") }, "Area Manager (opsional)"),
           React.createElement("button", { type: "button", disabled: !!actionBusy, className: "role-tab" + (form.role === "investor" ? " active" : ""), onClick: () => setRoleForm("investor") }, "Investor"),
           React.createElement("button", { type: "button", disabled: !!actionBusy, className: "role-tab" + (form.role === "owner" ? " active" : ""), onClick: () => setRoleForm("owner") }, "Owner")
         ),
@@ -9225,7 +9226,7 @@ function SettingAkun({ pushNotif }) {
           React.createElement("strong", null, p.display_name || p.displayName || p.email || p.user_id.slice(0, 8)),
           React.createElement("div", { style: { fontSize: 12, color: "var(--text2)" } }, "Login: ", p.email || "-"),
           React.createElement("div", { style: { fontSize: 12, color: "var(--text2)" } },
-            "Role: ", p.role === "manager" || p.role === "area_manager" ? "Area Manager" : p.role,
+            "Role: ", p.role === "manager" || p.role === "area_manager" ? "Area Manager (opsional)" : p.role,
             p.branchId ? ` | Cabang: ${branches.find((b) => b.id === p.branchId)?.name || p.branchId}` : "",
             (p.role === "manager" || p.role === "area_manager") ? (` | Kota: ${(getProfileCities(p).join(", ") || "—")}`) : "",
             p.investorId ? ` | Investor: ${investors.find((i) => i.id === p.investorId)?.nama || p.investorId}` : "",
@@ -11723,19 +11724,34 @@ function SettingAkun({ pushNotif }) {
 
     const saveArea = async () => {
       if (!form.name.trim() || !form.code.trim()) { pushNotif("Nama dan kode area wajib diisi.", "warning"); return; }
-      if (!form.managerId) { pushNotif("Pilih Area Manager.", "warning"); return; }
-      if (!form.ckId) { pushNotif("Pilih Central Kitchen.", "warning"); return; }
-      if (!selectedBranches.length) { pushNotif("Pilih minimal satu lapak.", "warning"); return; }
+      // Manager / CK / lapak OPSIONAL saat buat area dulu
+      // (hindari deadlock: area butuh manager, manager butuh area, CK butuh area).
+      // Lengkapi belakangan lewat edit area.
       setBusy(true);
       try {
         const areaId = form.id || ("area-" + uid());
-        const { error: ae } = await sb.from("operational_areas").upsert({ id: areaId, name: form.name.trim(), code: form.code.trim(), manager_id: form.managerId, central_kitchen_id: form.ckId, active: true, updated_at: nowIso() });
+        const { error: ae } = await sb.from("operational_areas").upsert({
+          id: areaId,
+          name: form.name.trim(),
+          code: form.code.trim(),
+          manager_id: form.managerId || null,
+          central_kitchen_id: form.ckId || null,
+          active: true,
+          updated_at: nowIso()
+        });
         if (ae) throw ae;
-        const { error: me } = await sb.from("profiles").update({ areaId }).eq("user_id", form.managerId);
-        if (me) throw me;
-        const allAreaBranchIds = [...new Set([...selectedBranches, form.ckId])];
-        const { error: be } = await sb.from("branches").update({ areaId }).in("id", allAreaBranchIds);
-        if (be) throw be;
+        if (form.managerId) {
+          const { error: me } = await sb.from("profiles").update({ areaId }).eq("user_id", form.managerId);
+          if (me) throw me;
+        }
+        const allAreaBranchIds = [...new Set([
+          ...selectedBranches,
+          ...(form.ckId ? [form.ckId] : [])
+        ])].filter(Boolean);
+        if (allAreaBranchIds.length) {
+          const { error: be } = await sb.from("branches").update({ areaId }).in("id", allAreaBranchIds);
+          if (be) throw be;
+        }
 
         const modal = Math.max(0, Number(form.modal) || 0);
         const perLapak = Math.max(0, Number(form.perLapak) || 0);
@@ -11752,7 +11768,10 @@ function SettingAkun({ pushNotif }) {
           const r = await sb.from("area_fund_accounts").insert({ area_id: areaId, account_type: accountType, branch_id: branchId, name, opening_balance: 0 }).select("id").single();
           if (r.error) throw r.error; return r.data.id;
         };
-        const ckAccountId = await ensureAccount("central_kitchen", form.ckId, "Dana CK " + (branches.find((b) => b.id === form.ckId)?.name || ""));
+        let ckAccountId = null;
+        if (form.ckId) {
+          ckAccountId = await ensureAccount("central_kitchen", form.ckId, "Dana CK " + (branches.find((b) => b.id === form.ckId)?.name || ""));
+        }
         const branchAccountIds = [];
         for (const bid of selectedBranches) branchAccountIds.push({ bid, id: await ensureAccount("branch", bid, "Kas " + (branches.find((b) => b.id === bid)?.name || bid)) });
         if (modal > 0 && !form.id) {
@@ -11760,7 +11779,7 @@ function SettingAkun({ pushNotif }) {
           const base = { transfer_id: transferId, area_id: areaId, date: today(), transaction_type: "modal_awal", amount: modal, source_type: "owner", description: "Modal awal " + form.name.trim(), created_by: null, status: "posted" };
           const r = await sb.from("area_fund_ledger").insert({ ...base, account_id: areaAccount.id, direction: "in" }); if (r.error) throw r.error;
         }
-        if (modal > 0 && (perLapak > 0 || form.ckId)) {
+        if (modal > 0 && form.ckId && ckAccountId && (perLapak > 0 || form.ckId)) {
           const allocated = perLapak * selectedBranches.length;
           const ckAmount = Math.max(0, modal - allocated);
           if (ckAmount > 0) {
@@ -11795,8 +11814,8 @@ function SettingAkun({ pushNotif }) {
         React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Pilih area yang sudah ada"), React.createElement("select", { className: "inp", value: selectedAreaId, onChange: (e) => e.target.value ? setSelectedAreaId(e.target.value) : reset() }, React.createElement("option", { value: "" }, "+ Buat area baru"), areas.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name)))),
         React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Nama area"), React.createElement("input", { className: "inp", value: form.name, onChange: (e) => setForm((f) => ({ ...f, name: e.target.value })), placeholder: "Area Operasional Temanggung" })),
         React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Kode area"), React.createElement("input", { className: "inp", value: form.code, onChange: (e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() })), placeholder: "TEM-01" })),
-        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Area Manager"), React.createElement("select", { className: "inp", value: form.managerId, onChange: (e) => setForm((f) => ({ ...f, managerId: e.target.value })) }, React.createElement("option", { value: "" }, "-- pilih manager --"), managers.map((m) => React.createElement("option", { key: m.user_id, value: m.user_id }, m.display_name || m.email)))),
-        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Central Kitchen"), React.createElement("select", { className: "inp", value: form.ckId, onChange: (e) => setForm((f) => ({ ...f, ckId: e.target.value })) }, React.createElement("option", { value: "" }, "-- pilih CK --"), ckBranches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name)))),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Area Manager (opsional)"), React.createElement("select", { className: "inp", value: form.managerId, onChange: (e) => setForm((f) => ({ ...f, managerId: e.target.value })) }, React.createElement("option", { value: "" }, "-- belakangan saja --"), managers.map((m) => React.createElement("option", { key: m.user_id, value: m.user_id }, m.display_name || m.email)))),
+        React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Central Kitchen (opsional dulu)"), React.createElement("select", { className: "inp", value: form.ckId, onChange: (e) => setForm((f) => ({ ...f, ckId: e.target.value })) }, React.createElement("option", { value: "" }, "-- belakangan saja --"), ckBranches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name)))),
         React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Lapak dalam area"), lapakBranches.length === 0 ? React.createElement("p", { className: "empty-txt" }, "Belum ada lapak.") : lapakBranches.map((b) => React.createElement("label", { key: b.id, className: "pay-check", style: { padding: "8px 0" } }, React.createElement("input", { type: "checkbox", checked: selectedBranches.includes(b.id), onChange: () => toggleBranch(b.id) }), React.createElement("span", null, b.name, " · ", b.city || "-")))),
         React.createElement("div", { className: "two-col" },
           React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Modal awal area (Rp)"), React.createElement("input", { className: "inp", type: "number", min: 0, value: form.modal, onChange: (e) => setForm((f) => ({ ...f, modal: e.target.value })), placeholder: "10000000" })),
