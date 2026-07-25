@@ -1,0 +1,15 @@
+{
+  "name": "evora-donuts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplikasi operasional bisnis donat multi-cabang (kasir, distribusi, gudang, gaji, pesanan, shift kas).",
+  "scripts": {
+    "test": "node tests/logic.test.js && node tests/flow.test.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
