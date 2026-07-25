@@ -2,20 +2,8 @@
   "name": "evora-donuts",
   "version": "1.2.0",
   "private": true,
-  "description": "Aplikasi operasional bisnis donat multi-cabang (kasir, distribusi, gudang, gaji, pesanan, shift kas).",
+  "description": "Aplikasi operasional bisnis",
   "scripts": {
-    "test": "node tests/logic.test.js && node tests/flow.test.js",
-    "build": "npm run minify && npm run gzip",
-    "minify": "npx terser app.bundle.js -o app.bundle.min.js --compress --mangle",
-    "gzip": "gzip -c app.bundle.min.js > app.bundle.min.js.gz || echo 'gzip not available'",
-    "analyze": "npx source-map-explorer app.bundle.js || echo 'Install source-map-explorer first'",
-    "deploy": "npm run build && vercel --prod"
-  },
-  "devDependencies": {
-    "terser": "^5.31.0",
-    "source-map-explorer": "^2.5.3"
-  },
-  "engines": {
-    "node": ">=18"
+    "build": "echo 'Vercel, do not build anything, just serve the files!'"
   }
 }
