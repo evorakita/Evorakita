@@ -1,7 +1,7 @@
 // sw.js — PWA Service Worker v3 (Lebih Optimal)
 // Cache-first untuk shell + network-first untuk data penting
 
-const CACHE_NAME = 'evora-v3-20260724';
+const CACHE_NAME = 'evora-v4-20260725';
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -12,7 +12,6 @@ const SHELL_ASSETS = [
   './error-handler.js',
   './ErrorBoundary.js',
   './validation.js',
-  './offline-sync.js',
   './manifest.webmanifest'
 ];
 

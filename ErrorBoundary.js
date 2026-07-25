@@ -1,6 +1,27 @@
 // ErrorBoundary.js — Global Error Boundary untuk Evora Donuts
 // Mencegah seluruh aplikasi crash karena error di satu komponen
 
+// Fallback toast global. window.pushNotif dipanggil di sini dan di offline-sync.js,
+// tapi notifikasi asli app (di dalam React tree) tidak pernah expose diri ke window,
+// jadi tanpa ini panggilan pushNotif dari luar React selalu silent no-op.
+if (!window.pushNotif) {
+  window.pushNotif = function (msg, type) {
+    var el = document.createElement("div");
+    el.textContent = msg;
+    var colors = { success: "#2ecc71", warning: "#f39c12", error: "#e74c3c", info: "#3498db" };
+    el.style.cssText =
+      "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:99999;" +
+      "background:" + (colors[type] || colors.info) + ";color:#111;padding:12px 20px;" +
+      "border-radius:10px;font:600 14px/1.4 sans-serif;max-width:90vw;text-align:center;" +
+      "box-shadow:0 4px 16px rgba(0,0,0,.3);transition:opacity .3s;";
+    document.body.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = "0";
+      setTimeout(function () { el.remove(); }, 300);
+    }, 3500);
+  };
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -96,8 +117,12 @@ class ErrorBoundary extends React.Component {
           }, "Coba Lagi")
         ),
 
-        // Tampilkan detail error hanya di development
-        process.env.NODE_ENV !== "production" && this.state.error && React.createElement("details", {
+        // Tampilkan detail error hanya di development.
+        // Catatan: file ini dimuat sebagai plain <script> (bukan lewat bundler), jadi
+        // `process` TIDAK ada di browser — memakai process.env langsung akan membuat
+        // ErrorBoundary ini sendiri crash persis saat mencoba menampilkan error.
+        // typeof check di bawah aman karena tidak mengakses `process` kalau belum ada.
+        (typeof window.APP_CONFIG !== "undefined" && window.APP_CONFIG?.DEBUG) && this.state.error && React.createElement("details", {
           style: { marginTop: "40px", maxWidth: "600px", textAlign: "left", fontSize: "13px" }
         },
           React.createElement("summary", { style: { cursor: "pointer", color: "#9d97ab" } }, "Detail Error (Developer)"),
