@@ -3,39 +3,55 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Evora Donuts</title>
-    <meta name="description" content="Evora Donuts - aplikasi operasional (React via CDN + Supabase Auth + RLS + Realtime)." />
+    <title>Evora Donuts — Final B1-B12</title>
+    <meta name="description" content="Evora Donuts - operasional multi-cabang: kasir HP mode gampang 44px, beli bahan satu pintu, stok benar, role manager-area filter, hero KPI omzet/food cost/waste/selisih kas, PWA offline, biaya distribusi per cabang, audit log." />
     <meta name="theme-color" content="#111111" />
-
-    <!-- PWA / ikon (PASTIKAN file logo.jpg ada di folder yang sama dengan index.html) -->
     <link rel="icon" href="./logo-192.png" type="image/png" />
     <link rel="apple-touch-icon" href="./logo-192.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
-
-    <link rel="stylesheet" href="./styles.css?v=1781146495" />
+    <link rel="stylesheet" href="./styles.css?v=final20260724" />
   </head>
   <body>
     <div id="root"></div>
-
-    <!-- React via CDN (tanpa npm / tanpa folder) -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-
-    <!-- Supabase JS (UMD) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
-    <!-- Library Excel (SheetJS) — dibutuhkan untuk tombol Download Excel di Tutup Buku -->
-    <!-- Library Excel (xlsx-js-style: fork xlsx yang mendukung styling sel). Hasil tetap .xlsx. -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+    <script src="./config.js?v=final20260724"></script>
+    <script src="./supabaseClient.js?v=final20260724"></script>
+    <script src="./error-handler.js?v=final20260724"></script>
+    <script src="./ErrorBoundary.js?v=final20260724"></script>
+    <script src="./validation.js?v=final20260724"></script>
+    <script src="./offline-sync.js?v=final20260724"></script>
+    <script src="./lazy-loader.js?v=final20260724"></script>
+    <!-- Production: gunakan bundle minified -->
+    <script src="./app.bundle.min.js?v=final20260724"></script>
+    <!-- Development (uncomment jika perlu debug):
+    <script src="./app.bundle.js?v=final20260724"></script>
+    -->
+    <script>
+      // Batch 12 P2: Register service worker PWA untuk cache shell (offline setengah matang → jadi matang)
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('./sw.js').then(reg => {
+            console.log('SW registered', reg.scope);
+          }).catch(err => {
+            console.warn('SW failed', err);
+          });
+        });
+      }
 
-    <!-- Konfigurasi (ISI sendiri) -->
-    <script src="./config.js?v=1781146495"></script>
-
-    <!-- Inisialisasi Supabase client -->
-    <script src="./supabaseClient.js?v=1781146495"></script>
-
-    <!-- App (hasil build, tanpa Babel) -->
-    <script src="./app.bundle.js?v=1781146495"></script>
-  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1c4cf150d638a9a',t:'MTc4NDI0NDc3NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+      // Wrap App dengan Error Boundary
+      window.addEventListener('load', () => {
+        if (window.ErrorBoundary && window.ReactDOM && document.getElementById('root')) {
+          const root = ReactDOM.createRoot(document.getElementById('root'));
+          root.render(
+            React.createElement(ErrorBoundary, null,
+              React.createElement(EvoraDonuts || (() => React.createElement('div', null, 'Loading...')))
+            )
+          );
+        }
+      });
+    </script>
+  </body>
 </html>
-

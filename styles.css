@@ -1370,3 +1370,74 @@ select.inp{cursor:pointer;}
   padding:11px 12px;
   border-radius:12px;
 }
+
+
+/* FE polish batch — sentuh & kejelasan */
+.tab, .btn-primary, .btn-secondary, .btn-danger-sm, .nav-burger {
+  min-height: 44px;
+}
+.btn-primary, .btn-secondary {
+  padding-left: 16px;
+  padding-right: 16px;
+  font-weight: 700;
+}
+.peng-row .btn-danger-sm, .row-wrap .btn-danger-sm {
+  min-height: 36px;
+  white-space: nowrap;
+}
+.info-txt strong { color: var(--text); }
+.login-title { letter-spacing: -0.03em; }
+.kpi-card { min-height: 88px; }
+@media (max-width: 700px) {
+  .inp, select.inp, input.inp {
+    min-height: 44px;
+    font-size: 16px; /* cegah zoom iOS */
+  }
+  .tbl th, .tbl td { font-size: 12.5px; }
+}
+
+/* empty-state CTA */
+.empty-state .btn-primary { min-height: 44px; margin-top: 8px; }
+.branch-status-card { min-height: 72px; }
+
+/* Offline banner */
+.app-wrap > .info-txt:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  font-weight: 600;
+}
+
+/* confirm / modal touch */
+.modal-box .btn-primary, .modal-box .btn-secondary, .modal-box .btn-danger-sm {
+  min-height: 44px;
+}
+.modal-header .btn-icon {
+  min-width: 40px;
+  min-height: 40px;
+}
+.notif button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+/* row-menu touch */
+.row-menu-btn {
+  min-width: 40px;
+  min-height: 40px;
+}
+.row-menu-item {
+  min-height: 44px;
+  padding: 10px 14px;
+}
+
+/* skeleton loading */
+@keyframes evoraPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.skeleton-card, .skeleton-line {
+  animation: evoraPulse 1.2s ease-in-out infinite;
+  background: var(--bg3);
+}
+.loading-shell { max-width: 560px; margin: 0 auto; }
