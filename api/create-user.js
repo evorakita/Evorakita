@@ -1,126 +1,114 @@
-module.exports = async (req, res) => {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+// /api/create-user.js
+// Serverless function Vercel — BUKAN dipanggil langsung dari browser dengan
+// service role key (itu akan bocor). Endpoint ini yang PEGANG service role key
+// (dari environment variable, aman di server), lalu browser cuma kirim
+// Authorization Bearer <access_token owner yang sedang login>.
+//
+// ENV YANG WAJIB ADA DI VERCEL (Project Settings → Environment Variables):
+//   SUPABASE_URL                → sama dengan yang di config.js
+//   SUPABASE_SERVICE_ROLE_KEY   → dari Supabase Dashboard → Settings → API
+//                                  (JANGAN PERNAH taruh ini di config.js/frontend!)
 
-  const SUPABASE_URL = process.env.SUPABASE_URL;
-  const ANON = process.env.SUPABASE_ANON_KEY;
-  const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const { createClient } = require("@supabase/supabase-js");
+
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  { auth: { autoRefreshToken: false, persistSession: false } }
+);
+
+module.exports = async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
 
   try {
-    if (!SUPABASE_URL || !ANON || !SERVICE)
-      return res.status(500).json({ error: "Env di Vercel belum lengkap (SUPABASE_URL/ANON/SERVICE)." });
-
+    // 1. Verifikasi token pemanggil (harus owner/manager yang sedang login)
     const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
-    if (!token) return res.status(401).json({ error: "Butuh Authorization Bearer token." });
-
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
-    const { emailOrUsername, password, role, displayName = null, branchId = null, investorId = null, areaId = null } = body;
-
-    const raw = String(emailOrUsername || "").trim();
-    const pwd = String(password || "").trim();
-    const finalRole = String(role || "").trim();
-
-    if (!raw) return res.status(400).json({ error: "Username/Email wajib diisi." });
-    if (!pwd || pwd.length < 6) return res.status(400).json({ error: "Password minimal 6 karakter." });
-    if (!["worker", "investor", "owner", "manager", "distribusi"].includes(finalRole))
-      return res.status(400).json({ error: "Role harus worker/investor/owner/manager/distribusi." });
-
-    const email = (raw.includes("@") ? raw : `${raw.toLowerCase()}@evoradonuts.local`).toLowerCase();
-    if (finalRole === "worker" && !branchId) return res.status(400).json({ error: "Pilih cabang untuk worker." });
-    if (finalRole === "investor" && !investorId) return res.status(400).json({ error: "Pilih investor untuk investor." });
-    // area opsional saat create manager — assign later via Area Operasional
-    // if (finalRole === "manager" && !areaId) return res.status(400).json({ error: "Pilih area operasional untuk manager." });
-
-    const userResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { apikey: ANON, Authorization: `Bearer ${token}` },
-    });
-    const userJson = await userResp.json();
-    if (!userResp.ok) return res.status(401).json({ error: userJson?.msg || "Token tidak valid." });
-    const ownerId = userJson?.id;
-    if (!ownerId) return res.status(401).json({ error: "Tidak bisa membaca owner id." });
-
-    const profResp = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?select=role&user_id=eq.${ownerId}&limit=1`,
-      { headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` } }
-    );
-    const profJson = await profResp.json();
-    const ownerRole = Array.isArray(profJson) && profJson[0]?.role;
-    if (ownerRole !== "owner") return res.status(403).json({ error: "Hanya owner yang boleh membuat akun." });
-
-    const createResp = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
-      method: "POST",
-      headers: {
-        apikey: SERVICE,
-        Authorization: `Bearer ${SERVICE}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email,
-        password: pwd,
-        email_confirm: true,
-        user_metadata: {
-          role: finalRole,
-          display_name: displayName || email.split("@")[0],
-          areaId: finalRole === "manager" ? areaId : null,
-          branchId: finalRole === "worker" ? branchId : null,
-          investorId: finalRole === "investor" ? investorId : null,
-        },
-        app_metadata: { role: finalRole },
-      }),
-    });
-    const createJson = await createResp.json();
-    if (!createResp.ok)
-      return res.status(400).json({ error: createJson?.msg || createJson?.error || "Gagal membuat user." });
-
-    const newUserId = createJson?.id || createJson?.user?.id;
-    if (!newUserId) return res.status(400).json({ error: "User dibuat tapi id tidak ditemukan." });
-
-    const profilePayload = {
-      user_id: newUserId,
-      email,
-      role: finalRole,
-      display_name: displayName || email.split("@")[0],
-      branchId: finalRole === "worker" ? branchId : null,
-      investorId: finalRole === "investor" ? investorId : null,
-      areaId: finalRole === "manager" ? areaId : null,
-      aktif: true,
-      status: "active",
-    };
-    const profInsertResp = await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
-      method: "POST",
-      headers: {
-        apikey: SERVICE,
-        Authorization: `Bearer ${SERVICE}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=minimal",
-      },
-      body: JSON.stringify(profilePayload),
-    });
-    if (!profInsertResp.ok) {
-      const errText = await profInsertResp.text();
-      console.warn("profiles insert warning:", errText);
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) {
+      res.status(401).json({ error: "Token tidak ada. Login dulu." });
+      return;
     }
 
-    await fetch(`${SUPABASE_URL}/rest/v1/invites`, {
-      method: "POST",
-      headers: {
-        apikey: SERVICE,
-        Authorization: `Bearer ${SERVICE}`,
-        "Content-Type": "application/json",
-        Prefer: "return=minimal",
-      },
-      body: JSON.stringify({
-        email,
-        role: finalRole,
-        displayName: displayName || null,
-        branchId: finalRole === "worker" ? branchId : null,
-        investorId: finalRole === "investor" ? investorId : null,
-        created_by: ownerId,
-      }),
-    }).catch(() => {});
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      res.status(401).json({ error: "Token tidak valid atau sudah kedaluwarsa." });
+      return;
+    }
 
-    return res.json({ ok: true, email, userId: newUserId });
+    const { data: callerProfile, error: callerErr } = await supabaseAdmin
+      .from("profiles")
+      .select("role")
+      .eq("user_id", userData.user.id)
+      .maybeSingle();
+    if (callerErr || !callerProfile || !["owner", "manager"].includes(callerProfile.role)) {
+      res.status(403).json({ error: "Cuma owner/manager yang boleh membuat akun baru." });
+      return;
+    }
+
+    // 2. Ambil & validasi body
+    const {
+      emailOrUsername, password, role, displayName,
+      branchId, investorId, gajiHarian, areaId, cities, city
+    } = req.body || {};
+
+    if (!emailOrUsername || !password) {
+      res.status(400).json({ error: "Email/username dan password wajib diisi." });
+      return;
+    }
+    if (String(password).trim().length < 6) {
+      res.status(400).json({ error: "Password minimal 6 karakter." });
+      return;
+    }
+    const allowedRoles = ["owner", "manager", "area_manager", "worker", "investor", "distribusi"];
+    if (!allowedRoles.includes(role)) {
+      res.status(400).json({ error: "Role tidak dikenali: " + role });
+      return;
+    }
+    // Manager cuma boleh membuat akun worker (bukan owner/manager lain) — cegah eskalasi hak akses.
+    // Kalau kamu mau manager bisa buat akun lain juga, longgarkan baris ini.
+    if (callerProfile.role === "manager" && role !== "worker") {
+      res.status(403).json({ error: "Manager cuma boleh membuat akun worker." });
+      return;
+    }
+
+    // 3. Buat user di Supabase Auth
+    const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+      email: emailOrUsername,
+      password: String(password).trim(),
+      email_confirm: true // langsung aktif, tidak perlu verifikasi email (workaround krn banyak pakai username palsu)
+    });
+    if (createErr) {
+      res.status(400).json({ error: createErr.message || "Gagal membuat akun di Auth." });
+      return;
+    }
+
+    // 4. Insert baris profiles yang sesuai
+    const { error: profileErr } = await supabaseAdmin.from("profiles").insert({
+      user_id: created.user.id,
+      email: emailOrUsername,
+      display_name: displayName || null,
+      role,
+      branchId: role === "worker" ? branchId : null,
+      investorId: role === "investor" ? investorId : null,
+      gajiHarian: role === "worker" ? gajiHarian : null,
+      areaId: role === "manager" ? areaId : null,
+      cities: role === "manager" ? cities : null,
+      city: role === "manager" ? city : null,
+      active: true
+    });
+    if (profileErr) {
+      // Rollback: kalau insert profiles gagal, hapus lagi user Auth-nya biar tidak nyangkut
+      // (akun Auth tanpa baris profiles = user yang bisa login tapi app-nya nge-block terus).
+      await supabaseAdmin.auth.admin.deleteUser(created.user.id).catch(() => {});
+      res.status(500).json({ error: "Gagal menyimpan profil: " + profileErr.message });
+      return;
+    }
+
+    res.status(200).json({ ok: true, user_id: created.user.id });
   } catch (e) {
-    return res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e) });
   }
 };
