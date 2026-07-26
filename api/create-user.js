@@ -44,7 +44,18 @@ module.exports = async (req, res) => {
       .eq("user_id", userData.user.id)
       .maybeSingle();
     if (callerErr || !callerProfile || !["owner", "manager"].includes(callerProfile.role)) {
-      res.status(403).json({ error: "Cuma owner/manager yang boleh membuat akun baru." });
+      // 🔧 DEBUG SEMENTARA — hapus blok ini setelah masalah ketemu
+      res.status(403).json({
+        error: "Cuma owner/manager yang boleh membuat akun baru.",
+        debug: {
+          supabase_url_used: process.env.SUPABASE_URL || null,
+          token_user_id: userData.user.id,
+          token_email: userData.user.email,
+          caller_profile_found: callerProfile,
+          caller_error: callerErr ? callerErr.message : null,
+          service_key_prefix: (process.env.SUPABASE_SERVICE_ROLE_KEY || "").slice(0, 12)
+        }
+      });
       return;
     }
 
