@@ -5671,7 +5671,7 @@ function useConfirm() {
         rows: branchStats.map((b) => {
           const workers = b.workers || [];
           const tipeLabel = b.type === "investasi" ? "Investasi" : b.type === "central_kitchen" ? "Dapur pusat" : "Mandiri";
-          const investorNama = b.type === "investasi" ? (investorsAll.find((i) => i.id === b.investorId)?.nama || "-") : null;
+          const investorNama = (b.type === "investasi" && !managerMode) ? (investorsAll.find((i) => i.id === b.investorId)?.nama || "-") : null;
           const subParts = [
             tipeLabel,
             workers.length + " pekerja" + (workers.length ? ": " + workers.map((w) => w.display_name || w.displayName || w.email || "-").join(", ") : "")
@@ -14006,6 +14006,7 @@ function SettingAkun({ pushNotif }) {
     // ── Setor ke owner: kirim (status → perjalanan). Owner yang konfirmasi jadi selesai. ──
     const dibawa = getKurirList().filter((k) => k.statusUang === "dibawa");
     const perjalanan = getKurirList().filter((k) => k.statusUang === "perjalanan");
+    const belumSetor = [...dibawa, ...perjalanan]; // belum dikonfirmasi owner (dipakai badge tab "Setor owner")
     const totalDibawa = dibawa.reduce((a, k) => a + k.uangDibawa, 0);
     const totalPerjalanan = perjalanan.reduce((a, k) => a + k.uangDibawa, 0);
     const kirimKeOwner = async () => {
