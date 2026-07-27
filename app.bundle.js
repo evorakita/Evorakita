@@ -5168,8 +5168,7 @@ function useConfirm() {
             );
           })
         ),
-        busy && filtered.length === 0 && React.createElement(SkeletonList, { rows: 2 }),
-        !busy && filtered.length === 0 && React.createElement(EmptyState, { icon: "\uD83C\uDF69", title: "Belum ada produksi di rentang ini", desc: "Isi gudang dulu (stok hijau), lalu catat produksi di form atas." })
+        filtered.length === 0 && React.createElement(EmptyState, { icon: "\uD83C\uDF69", title: "Belum ada produksi di rentang ini", desc: "Isi gudang dulu (stok hijau), lalu catat produksi di form atas." })
       ),
       subtab === "distribusi" && React.createElement("div", null,
         React.createElement("div", { className: "kpi-grid" },
