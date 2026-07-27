@@ -13,22 +13,42 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- 🔧 Penangkap error sementara — nampilin pesan error PERSIS di layar kalau
+         app crash (blank/putih/abu-abu). Ditaruh PALING ATAS supaya aktif
+         sebelum script lain jalan. Hapus <script> ini kalau sudah tidak perlu. -->
+    <script>
+      (function () {
+        function showErr(msg) {
+          var el = document.getElementById('__crash_banner__');
+          if (!el) {
+            el = document.createElement('div');
+            el.id = '__crash_banner__';
+            el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;' +
+              'background:#7f1d1d;color:#fff;padding:14px;font:13px/1.5 monospace;' +
+              'white-space:pre-wrap;word-break:break-word;max-height:80vh;overflow:auto;' +
+              'border-bottom:3px solid #ef4444;';
+            document.body.appendChild(el);
+          }
+          el.textContent += (el.textContent ? '\n\n---\n\n' : '') + msg;
+        }
+        window.addEventListener('error', function (e) {
+          showErr('ERROR: ' + (e.message || '') + '\nFile: ' + (e.filename || '') + ':' + (e.lineno || '') +
+            (e.error && e.error.stack ? '\n' + e.error.stack : ''));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e.reason;
+          showErr('PROMISE REJECTED: ' + (r && r.message ? r.message : String(r)) +
+            (r && r.stack ? '\n' + r.stack : ''));
+        });
+      })();
+    </script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
     <script src="./config.js?v=final20260724"></script>
     <script src="./supabaseClient.js?v=final20260724"></script>
-    <script src="./error-handler.js?v=final20260724"></script>
-    <script src="./ErrorBoundary.js?v=final20260724"></script>
-    <script src="./validation.js?v=final20260724"></script>
-    <script src="./offline-sync.js?v=final20260724"></script>
-    <script src="./lazy-loader.js?v=final20260724"></script>
-    <!-- Production: gunakan bundle minified -->
-    <script src="./app.bundle.min.js?v=final20260724"></script>
-    <!-- Development (uncomment jika perlu debug):
     <script src="./app.bundle.js?v=final20260724"></script>
-    -->
     <script>
       // Batch 12 P2: Register service worker PWA untuk cache shell (offline setengah matang → jadi matang)
       if ('serviceWorker' in navigator) {
@@ -40,18 +60,6 @@
           });
         });
       }
-
-      // Wrap App dengan Error Boundary
-      window.addEventListener('load', () => {
-        if (window.ErrorBoundary && window.ReactDOM && document.getElementById('root')) {
-          const root = ReactDOM.createRoot(document.getElementById('root'));
-          root.render(
-            React.createElement(ErrorBoundary, null,
-              React.createElement(EvoraDonuts || (() => React.createElement('div', null, 'Loading...')))
-            )
-          );
-        }
-      });
     </script>
   </body>
 </html>
