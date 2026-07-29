@@ -332,7 +332,7 @@ var EvoraDonuts = (() => {
         const transfers = Object.fromEntries((trRes.data || []).map((t) => [t.id, t]));
         const mapped = lineRes.data.map((l) => {
           const t = transfers[l.transfer_id] || {};
-          const status = t.status === "completed" || t.status === "partially_received" ? "diterima" : t.status === "in_transit" ? "perjalanan" : t.status === "cancelled" ? "dibatalkan" : "pending";
+          const status = l.cancelled ? "dibatalkan" : (t.status === "completed" || t.status === "partially_received" ? "diterima" : t.status === "in_transit" ? "perjalanan" : t.status === "cancelled" ? "dibatalkan" : "pending");
           return { id: t.id + ":" + l.id, transferId: t.id, lineId: l.id, date: t.date, ts: t.created_at, produksiId: null, menuId: l.menu_id, menuNama: l.menu_id, branchId: l.to_branch_id, branchName: branches.find((b) => b.id === l.to_branch_id)?.name || l.to_branch_id, jumlahKirim: l.quantity_sent, jumlahTerima: l.quantity_good, selisih: (l.quantity_missing || 0) + (l.quantity_damaged || 0), catatanSelisih: l.note, hppPerPcs: l.unit_cost, hppTotal: Number(l.quantity_sent || 0) * Number(l.unit_cost || 0), status };
         });
         S.setLocal("distribusiCK", mapped);
@@ -3520,11 +3520,24 @@ function useConfirm() {
         setEditModal(null);
         return;
       }
+      const qtyByMenu = (items) => items.reduce((m, it) => { m[it.menuId] = (m[it.menuId] || 0) + Number(it.qty || 0); return m; }, {});
+      const oldQty = qtyByMenu(old?.items || []);
+      const newQty = qtyByMenu(newItems);
+      const menuIds = new Set([...Object.keys(oldQty), ...Object.keys(newQty)]);
+      let stoks = S.get("stokLapak") || [];
+      for (const menuId of menuIds) {
+        const delta = (oldQty[menuId] || 0) - (newQty[menuId] || 0);
+        if (!delta) continue;
+        const idx = stoks.findIndex((s) => s.branchId === old.branchId && s.menuId === menuId);
+        if (idx >= 0) stoks = stoks.map((s, i) => i === idx ? { ...s, stok: Number(s.stok || 0) + delta } : s);
+        else if (delta > 0) stoks = [...stoks, { id: uid(), branchId: old.branchId, menuId, stok: delta }];
+      }
+      S.set("stokLapak", stoks);
       S.set("transactions", txs.map((t) => t.id === txId ? { ...t, items: newItems, total: newItems.reduce((a, x) => a + x.hargaJual * x.qty, 0), totalHPP: newItems.reduce((a, x) => a + x.hpp * x.qty, 0), edited: true } : t));
       const logs = S.get("editLog") || [];
       S.set("editLog", [...logs, { id: uid(), ts: tsForDate(safeTxDate), txId, branchId, branchName: curBranch?.name || branchId, alasan, before: old?.items || [], after: newItems }]);
       setEditModal(null);
-      pushNotif("Transaksi diperbarui.", "warning");
+      pushNotif("Transaksi diperbarui & stok disesuaikan.", "warning");
     };
 
     const getSetoran = useCallback(() => {
@@ -7625,11 +7638,26 @@ function useConfirm() {
       }
       const branchId = old?.branchId;
       const branchName = branches.find((b) => b.id === branchId)?.name || branchId;
+      // Koreksi stokLapak sesuai selisih qty lama vs baru per menu — supaya edit
+      // (misal salah input jumlah) juga mengoreksi stok, bukan cuma angka transaksi.
+      const qtyByMenu = (items) => items.reduce((m, it) => { m[it.menuId] = (m[it.menuId] || 0) + Number(it.qty || 0); return m; }, {});
+      const oldQty = qtyByMenu(old?.items || []);
+      const newQty = qtyByMenu(newItems);
+      const menuIds = new Set([...Object.keys(oldQty), ...Object.keys(newQty)]);
+      let stoks = S.get("stokLapak") || [];
+      for (const menuId of menuIds) {
+        const delta = (oldQty[menuId] || 0) - (newQty[menuId] || 0); // qty berkurang (dikoreksi turun) → delta positif → stok dikembalikan
+        if (!delta) continue;
+        const idx = stoks.findIndex((s) => s.branchId === branchId && s.menuId === menuId);
+        if (idx >= 0) stoks = stoks.map((s, i) => i === idx ? { ...s, stok: Number(s.stok || 0) + delta } : s);
+        else if (delta > 0) stoks = [...stoks, { id: uid(), branchId, menuId, stok: delta }];
+      }
+      S.set("stokLapak", stoks);
       S.set("transactions", txs.map((t) => t.id === txId ? { ...t, items: newItems, total: newItems.reduce((a, x) => a + x.hargaJual * x.qty, 0), totalHPP: newItems.reduce((a, x) => a + x.hpp * x.qty, 0), edited: true } : t));
       const logs = S.get("editLog") || [];
       S.set("editLog", [...logs, { id: uid(), ts: tsForDate(date), txId, branchId, branchName, alasan, before: old?.items || [], after: newItems }]);
       setEditModal(null);
-      pushNotif?.("Transaksi diperbarui.", "warning");
+      pushNotif?.("Transaksi diperbarui & stok disesuaikan.", "warning");
     };
 
     const toggleBranch = (id) => setOpenBranches((o) => ({ ...o, [id]: !o[id] }));
