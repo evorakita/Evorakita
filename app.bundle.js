@@ -3503,6 +3503,8 @@ function useConfirm() {
           }
         }
         finishLocal("Transaksi disimpan! " + bayarLabel(metode) + (kembalian > 0 ? " · Kembalian " + fmtRp(kembalian) : ""), printed);
+      } catch (e) {
+        pushNotif("Terjadi kendala saat proses pembayaran: " + (e?.message || String(e)) + ". CEK DULU riwayat transaksi sebelum mengulang, supaya tidak tercatat dobel.", "warning");
       } finally {
         setPayBusy(false);
       }
@@ -4888,10 +4890,29 @@ function useConfirm() {
           message: `Hapus catatan produksi "${p.menuNama}" (${p.jumlah} pcs, ${formatTanggalIndo(p.date)})? Belum pernah didistribusikan, aman dihapus.`,
           danger: true,
           confirmLabel: "Hapus",
-          onConfirm: async () => {
-            try { await batalkanPemakaianProduksi(p.id); } catch (e) { pushNotif("Stok gudang gagal diretur: " + (e?.message || e), "warning"); }
-            S.set("produksiCK", (S.get("produksiCK") || []).filter((x) => x.id !== p.id));
-            pushNotif("Produksi dihapus.", "warning");
+          requireText: true,
+          textLabel: "Alasan hapus",
+          textPlaceholder: "Contoh: salah input jumlah/menu...",
+          onConfirm: async (alasan) => {
+            // Deteksi dulu: data ini dari tabel lama (produksiCK) atau sistem baru
+            // (production_batches, dipakai jalur RPC pekerja dapur)? Dua sistem ini
+            // butuh cara hapus yang beda supaya stok bahan & stok donat jadi ikut
+            // benar, bukan cuma hilang dari tampilan.
+            const { data: legacyRow } = await sb.from("produksiCK").select("id").eq("id", p.id).maybeSingle();
+            if (legacyRow) {
+              try { await batalkanPemakaianProduksi(p.id); } catch (e) { pushNotif("Stok gudang gagal diretur: " + (e?.message || e), "warning"); }
+              S.set("produksiCK", (S.get("produksiCK") || []).filter((x) => x.id !== p.id));
+              pushNotif("Produksi dihapus.", "warning");
+            } else {
+              const { data: rpcData, error: rpcErr } = await sb.rpc("void_production_batch", { p_batch_id: p.id, p_reason: alasan || "Dihapus dari Dapur Pusat" });
+              if (rpcErr || !rpcData?.ok) {
+                pushNotif(rpcData?.message || rpcErr?.message || "Gagal menghapus produksi.", "warning");
+                return;
+              }
+              await syncNormalizedOperationalState().catch(() => {});
+              await S.loadKey("produksiCK");
+              pushNotif("Produksi dihapus & stok bahan dikembalikan.", "warning");
+            }
           },
         });
         return;
@@ -4951,6 +4972,22 @@ function useConfirm() {
           }
           setReturBusy((b) => ({ ...b, [d.id]: true }));
           try {
+            // d.lineId hanya terisi untuk baris yang berasal dari sistem BARU
+            // (stock_transfer_lines, dipakai jalur RPC). Baris dari tabel lama
+            // (distribusiCK) tidak punya field ini.
+            if (d.lineId) {
+              const { data: rpcData, error: rpcErr } = await sb.rpc("void_stock_transfer_line", { p_line_id: d.lineId, p_reason: alasan.trim() });
+              if (rpcErr || !rpcData?.ok) throw new Error(rpcData?.message || rpcErr?.message || "Gagal membatalkan distribusi.");
+              await syncNormalizedOperationalState().catch(() => {});
+              await S.loadKey("stokLapak");
+              pushNotif(
+                rpcData.kekurangan > 0
+                  ? `Distribusi dibatalkan. ${rpcData.kekurangan} pcs dari distribusi ini sepertinya sudah terjual/terpakai sebelum dibatalkan (stok ditarik sampai 0 saja).`
+                  : `Distribusi dibatalkan & ${jmlTarik} pcs stok ${d.branchName} sudah ditarik balik.`,
+                "warning"
+              );
+              return;
+            }
             const stoks = S.get("stokLapak") || [];
             const existing = stoks.find((s) => s.branchId === d.branchId && s.menuId === d.menuId);
             const stokSaatIni = existing?.stok || 0;
@@ -5004,6 +5041,13 @@ function useConfirm() {
         onConfirm: async () => {
           setReturBusy((b) => ({ ...b, [d.id]: true }));
           try {
+            if (d.lineId) {
+              const { data: rpcData, error: rpcErr } = await sb.rpc("void_stock_transfer_line", { p_line_id: d.lineId, p_reason: "Dihapus saat masih Pending (input keliru, belum dikonfirmasi cabang)." });
+              if (rpcErr || !rpcData?.ok) throw new Error(rpcData?.message || rpcErr?.message || "Gagal menghapus distribusi.");
+              await syncNormalizedOperationalState().catch(() => {});
+              pushNotif("Distribusi pending berhasil dihapus.", "warning");
+              return;
+            }
             const { data: sess } = await sb.auth.getSession();
             const uid = sess?.session?.user?.id || null;
             const { error } = await sb.from("distribusiCK")
@@ -13935,11 +13979,21 @@ function SettingAkun({ pushNotif }) {
     const ambilDariCK = async (x) => {
       setBusy(true);
       try {
-        const ids = new Set(x.rows.filter((d) => d.status === "pending").map((d) => d.id));
-        if (ids.size === 0) { setBusy(false); return; }
-        for (const id of ids) {
-          await sb.from("distribusiCK").update({ status: "perjalanan", kurirAmbilTs: nowIso(), kurirNama: namaSaya }).eq("id", id);
+        const rowsPending = x.rows.filter((d) => d.status === "pending");
+        if (rowsPending.length === 0) { setBusy(false); return; }
+        const doneTransferIds = new Set();
+        for (const d of rowsPending) {
+          if (d.transferId) {
+            // Baris dari sistem baru — statusnya nempel di stock_transfers (per transfer,
+            // bukan per baris), jadi cukup update sekali per transferId.
+            if (doneTransferIds.has(d.transferId)) continue;
+            doneTransferIds.add(d.transferId);
+            await sb.from("stock_transfers").update({ status: "in_transit", kurir_ambil_ts: nowIso(), kurir_nama: namaSaya }).eq("id", d.transferId);
+          } else {
+            await sb.from("distribusiCK").update({ status: "perjalanan", kurirAmbilTs: nowIso(), kurirNama: namaSaya }).eq("id", d.id);
+          }
         }
+        await syncNormalizedOperationalState().catch(() => {});
         await S.loadKey("distribusiCK");
         pushNotif("Donat untuk " + x.branch.name + " diambil. Status: dalam perjalanan.", "success");
       } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
@@ -13948,10 +14002,18 @@ function SettingAkun({ pushNotif }) {
     const sampaiLapak = async (x) => {
       setBusy(true);
       try {
-        const ids = new Set(x.rows.filter((d) => d.status === "perjalanan").map((d) => d.id));
-        for (const id of ids) {
-          await sb.from("distribusiCK").update({ status: "perjalanan", kurirSampaiTs: nowIso() }).eq("id", id);
+        const rowsPerjalanan = x.rows.filter((d) => d.status === "perjalanan");
+        const doneTransferIds = new Set();
+        for (const d of rowsPerjalanan) {
+          if (d.transferId) {
+            if (doneTransferIds.has(d.transferId)) continue;
+            doneTransferIds.add(d.transferId);
+            await sb.from("stock_transfers").update({ kurir_sampai_ts: nowIso() }).eq("id", d.transferId);
+          } else {
+            await sb.from("distribusiCK").update({ status: "perjalanan", kurirSampaiTs: nowIso() }).eq("id", d.id);
+          }
         }
+        await syncNormalizedOperationalState().catch(() => {});
         await S.loadKey("distribusiCK");
         pushNotif("Ditandai sudah sampai " + x.branch.name + ". Minta pekerja lapak konfirmasi terima.", "success");
       } catch (e) { pushNotif("Gagal: " + (e?.message || e), "warning"); } finally { setBusy(false); }
@@ -14210,15 +14272,32 @@ function SettingAkun({ pushNotif }) {
         await loadStokBahanFromDb().catch(() => {});
         setForm((f) => ({ ...f, jumlah: "", keterangan: "" }));
         pushNotif("Produksi tercatat. Stok gudang sudah dipotong.", "success");
+      } catch (e) {
+        pushNotif("Gagal menyimpan produksi: " + (e?.message || String(e)), "warning");
       } finally {
         setBusy(false);
       }
     };
 
     const hapus = async (id) => {
-      try { await batalkanPemakaianProduksi(id); } catch (e) { pushNotif("Gagal membatalkan pemakaian bahan: " + (e?.message || e), "warning"); }
-      S.set("produksiCK", (S.get("produksiCK") || []).filter((x) => x.id !== id));
-      pushNotif("Dihapus.", "warning");
+      // Sama seperti di Owner: entry dari halaman ini SELALU masuk sistem baru
+      // (production_batches lewat submit_production_atomic), jadi cek dulu baru
+      // arahkan ke cara hapus yang benar.
+      const { data: legacyRow } = await sb.from("produksiCK").select("id").eq("id", id).maybeSingle();
+      if (legacyRow) {
+        try { await batalkanPemakaianProduksi(id); } catch (e) { pushNotif("Gagal membatalkan pemakaian bahan: " + (e?.message || e), "warning"); }
+        S.set("produksiCK", (S.get("produksiCK") || []).filter((x) => x.id !== id));
+        pushNotif("Dihapus.", "warning");
+      } else {
+        const { data: rpcData, error: rpcErr } = await sb.rpc("void_production_batch", { p_batch_id: id, p_reason: "Dihapus oleh pekerja dapur" });
+        if (rpcErr || !rpcData?.ok) {
+          pushNotif(rpcData?.message || rpcErr?.message || "Gagal menghapus produksi.", "warning");
+          return;
+        }
+        await syncNormalizedOperationalState().catch(() => {});
+        await S.loadKey("produksiCK");
+        pushNotif("Dihapus & stok bahan dikembalikan.", "warning");
+      }
     };
 
     // Absensi logic (sama seperti WorkerPage)
