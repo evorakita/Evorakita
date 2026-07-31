@@ -7995,6 +7995,42 @@ function useConfirm() {
       finally { setBusyGaji((b) => { const c = { ...b }; delete c[userId]; return c; }); }
     };
 
+    const [busyHapusGaji, setBusyHapusGaji] = useState({});
+    // Hapus catatan pembayaran gaji (misal: salah kirim jumlah, atau salah
+    // pekerja). Kalau statusnya sudah "dikonfirmasi" pekerja, beri peringatan
+    // ekstra jelas — menghapus catatan ini TIDAK menarik kembali uang yang
+    // sudah diterima pekerja, cuma menghapus jejak administrasinya supaya
+    // bisa dikirim ulang dengan jumlah yang benar.
+    const hapusGajiPembayaran = (g) => {
+      confirmAsk({
+        title: "Hapus Catatan Gaji",
+        message: g.status === "dikonfirmasi"
+          ? `⚠️ Gaji ${fmtRp(g.jumlah)} untuk ${g.namaPekerja} SUDAH DIKONFIRMASI diterima pekerja. Menghapus catatan ini TIDAK menarik kembali uang yang sudah diberikan — cuma menghapus catatan administrasinya (misal karena salah input jumlah/bulan). Pastikan pekerja sudah tahu sebelum lanjut.`
+          : `Hapus catatan gaji ${fmtRp(g.jumlah)} untuk ${g.namaPekerja} (bulan ${g.bulan})? Belum dikonfirmasi pekerja, aman dihapus kalau salah input.`,
+        danger: true,
+        confirmLabel: "Hapus",
+        requireText: true,
+        textLabel: "Alasan hapus",
+        textPlaceholder: "Contoh: salah input jumlah, salah pekerja...",
+        onConfirm: async (alasan) => {
+          setBusyHapusGaji((b) => ({ ...b, [g.id]: true }));
+          try {
+            const { data, error } = await sb.from("gajiPembayaran").delete().eq("id", g.id).select();
+            if (error) throw error;
+            if (!data || data.length === 0) {
+              pushNotif("Tidak ada yang terhapus — kemungkinan data ini masih terkunci di database. Muat ulang halaman lalu coba lagi.", "warning");
+              return;
+            }
+            const logs = S.get("editLog") || [];
+            S.set("editLog", [...logs, { id: uid(), ts: nowIso(), txId: g.id, branchId: g.branchId, branchName: g.branchName, alasan: "[Hapus Gaji] " + alasan, before: g, after: null }]);
+            await S.loadKey("gajiPembayaran");
+            pushNotif("Catatan gaji dihapus. Kalau perlu, kirim ulang lewat tombol Bayarkan Gaji.", "warning");
+          } catch (e) { pushNotif(e?.message || String(e), "warning"); }
+          finally { setBusyHapusGaji((b) => { const c = { ...b }; delete c[g.id]; return c; }); }
+        },
+      });
+    };
+
     // Hapus 1 catatan absensi (misal: salah check-in di hari yang seharusnya
     // libur). Sengaja per-baris, BUKAN lewat "Bersihkan Data" yang hapus 1
     // cabang+1 hari PENUH (semua pekerja) — supaya koreksi 1 orang tidak
@@ -8132,10 +8168,16 @@ function useConfirm() {
           // ── Tombol bayar gaji / status ──
           gajiInfo && gajiInfo.gajiHarian > 0 && gajiInfo.total > 0
             ? sudahBayar
-              ? React.createElement("div", { style: { padding: "8px 12px", borderRadius: 8, background: "color-mix(in srgb, var(--green) 12%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--green) 30%, var(--border))", fontSize: 13 } },
+              ? React.createElement("div", { style: { padding: "8px 12px", borderRadius: 8, background: "color-mix(in srgb, var(--green) 12%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--green) 30%, var(--border))", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" } },
                   sudahBayar.status === "dikonfirmasi"
                     ? React.createElement("span", { style: { color: "var(--green)", fontWeight: 700 } }, "✅ Gaji sudah diterima & dikonfirmasi pekerja")
-                    : React.createElement("span", { style: { color: "var(--accent)" } }, "📤 Gaji ", React.createElement("strong", null, fmtRp(sudahBayar.jumlah)), " sudah dikirim — menunggu konfirmasi pekerja")
+                    : React.createElement("span", { style: { color: "var(--accent)" } }, "📤 Gaji ", React.createElement("strong", null, fmtRp(sudahBayar.jumlah)), " sudah dikirim — menunggu konfirmasi pekerja"),
+                  React.createElement("button", {
+                    className: "btn-danger-sm",
+                    disabled: !!busyHapusGaji[sudahBayar.id],
+                    title: "Hapus catatan gaji ini (misal salah input)",
+                    onClick: () => hapusGajiPembayaran(sudahBayar)
+                  }, busyHapusGaji[sudahBayar.id] ? "..." : "🗑️ Hapus")
                 )
               : React.createElement("button", {
                   className: "btn-primary btn-full",
