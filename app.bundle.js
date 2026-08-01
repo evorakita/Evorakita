@@ -948,7 +948,7 @@ var EvoraDonuts = (() => {
         React.createElement("button", { className: "btn-secondary btn-sm", onClick: () => geser(1) }, "\u25B6"),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           React.createElement("option", { value: "all" }, "Semua cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("select", { className: "inp inp-sm", value: urut, onChange: (e) => setUrut(e.target.value) },
           React.createElement("option", { value: "omzet" }, "Urut: Omzet"),
@@ -3864,7 +3864,7 @@ function useConfirm() {
       // Filter tanggal & cabang
       React.createElement("div", { className: "row-wrap mb8" },
         React.createElement("select", { className: "inp inp-sm", value: branchId, onChange: (e) => setBranchId(e.target.value), disabled: !!me?.branchId },
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         // Owner: bisa pilih tanggal bebas | Worker: tampil hari ini saja (tidak bisa diubah)
         canChangeDate
@@ -8093,7 +8093,7 @@ function useConfirm() {
         React.createElement("input", { type: "month", className: "inp inp-sm", value: month, onChange: (e) => setMonth(e.target.value) }),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           React.createElement("option", { value: "all" }, "Semua cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("button", { className: "btn-primary btn-sm", onClick: lockMonth }, "Kunci Rekap"),
         React.createElement("button", { className: "btn-secondary btn-sm", onClick: unlockMonth }, "Buka Kunci")
@@ -9632,7 +9632,7 @@ function SettingAkun({ pushNotif }) {
           }
         },
           React.createElement("option", { value: "" }, "-- Pilih --"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         formErrors.branchId && React.createElement("p", { className: "field-warning" }, formErrors.branchId)
       ),
@@ -10844,7 +10844,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("label", { style: { fontSize: 12, color: "var(--text2)", fontWeight: 700 } }, "Lapak:"),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           branches.length === 0 && React.createElement("option", null, "Belum ada cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         )
       ),
 
@@ -11259,7 +11259,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("label", { style: { fontSize: 12, color: "var(--text2)", fontWeight: 700 } }, "Lapak:"),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           branches.length === 0 && React.createElement("option", null, "Belum ada cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         )
       ),
 
@@ -11605,7 +11605,7 @@ function SettingAkun({ pushNotif }) {
       React.createElement("div", { className: "filter-bar mb8" },
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           React.createElement("option", { value: "" }, "-- Semua Cabang --"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("input", { type: "date", className: "inp inp-sm", value: selDate, onChange: (e) => setSelDate(e.target.value) })
       ),
@@ -13218,7 +13218,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("input", { type: "month", className: "inp inp-sm", value: bulan, onChange: (e) => setBulan(e.target.value) }),
         React.createElement("select", { className: "inp inp-sm", value: branchId, onChange: (e) => setBranchId(e.target.value) },
           React.createElement("option", { value: "all" }, "Semua cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name))
+          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("button", { className: "btn-secondary", onClick: exportAk }, "Export Excel")
       ),
