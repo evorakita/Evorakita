@@ -328,12 +328,13 @@ var EvoraDonuts = (() => {
           createdBy: p.created_by
         })));
       }
+      const menus = S.get("menuVarian") || [];
       if (!trRes.error && !lineRes.error && Array.isArray(trRes.data) && Array.isArray(lineRes.data)) {
         const transfers = Object.fromEntries((trRes.data || []).map((t) => [t.id, t]));
         const mapped = lineRes.data.map((l) => {
           const t = transfers[l.transfer_id] || {};
           const status = l.cancelled ? "dibatalkan" : (t.status === "completed" || t.status === "partially_received" ? "diterima" : t.status === "in_transit" ? "perjalanan" : t.status === "cancelled" ? "dibatalkan" : "pending");
-          return { id: t.id + ":" + l.id, transferId: t.id, lineId: l.id, date: t.date, ts: t.created_at, produksiId: null, menuId: l.menu_id, menuNama: l.menu_id, branchId: l.to_branch_id, branchName: branches.find((b) => b.id === l.to_branch_id)?.name || l.to_branch_id, jumlahKirim: l.quantity_sent, jumlahTerima: l.quantity_good, selisih: (l.quantity_missing || 0) + (l.quantity_damaged || 0), catatanSelisih: l.note, hppPerPcs: l.unit_cost, hppTotal: Number(l.quantity_sent || 0) * Number(l.unit_cost || 0), status };
+          return { id: t.id + ":" + l.id, transferId: t.id, lineId: l.id, date: t.date, ts: t.created_at, produksiId: null, menuId: l.menu_id, menuNama: menus.find((m) => m.id === l.menu_id)?.nama || l.menu_id, branchId: l.to_branch_id, branchName: branches.find((b) => b.id === l.to_branch_id)?.name || l.to_branch_id, jumlahKirim: l.quantity_sent, jumlahTerima: l.quantity_good, selisih: (l.quantity_missing || 0) + (l.quantity_damaged || 0), catatanSelisih: l.note, hppPerPcs: l.unit_cost, hppTotal: Number(l.quantity_sent || 0) * Number(l.unit_cost || 0), status };
         });
         S.setLocal("distribusiCK", mapped);
       }
@@ -948,7 +949,7 @@ var EvoraDonuts = (() => {
         React.createElement("button", { className: "btn-secondary btn-sm", onClick: () => geser(1) }, "\u25B6"),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           React.createElement("option", { value: "all" }, "Semua cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("select", { className: "inp inp-sm", value: urut, onChange: (e) => setUrut(e.target.value) },
           React.createElement("option", { value: "omzet" }, "Urut: Omzet"),
@@ -3864,7 +3865,7 @@ function useConfirm() {
       // Filter tanggal & cabang
       React.createElement("div", { className: "row-wrap mb8" },
         React.createElement("select", { className: "inp inp-sm", value: branchId, onChange: (e) => setBranchId(e.target.value), disabled: !!me?.branchId },
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         // Owner: bisa pilih tanggal bebas | Worker: tampil hari ini saja (tidak bisa diubah)
         canChangeDate
@@ -8093,7 +8094,7 @@ function useConfirm() {
         React.createElement("input", { type: "month", className: "inp inp-sm", value: month, onChange: (e) => setMonth(e.target.value) }),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           React.createElement("option", { value: "all" }, "Semua cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("button", { className: "btn-primary btn-sm", onClick: lockMonth }, "Kunci Rekap"),
         React.createElement("button", { className: "btn-secondary btn-sm", onClick: unlockMonth }, "Buka Kunci")
@@ -8307,7 +8308,7 @@ function useConfirm() {
       React.createElement("div", { className: "add-row" },
         React.createElement("select", { className: "inp inp-sm", value: nRB.bahanId, onChange: (e) => setNRB((x) => ({ ...x, bahanId: e.target.value })) },
           bahan.length === 0 && React.createElement("option", null, "-- Tambah bahan dulu --"),
-          bahan.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama, " (Modal: ", fmtRp(getBahanHppPerPcs(b, { rounded: true })), "/pcs)"))
+          bahan.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama, " (Modal: ", fmtRp(getBahanHppPerPcs(b, { rounded: true })), "/pcs)"))
         ),
         React.createElement("input", { className: "inp inp-sm", type: "number", placeholder: "Pakai berapa takaran", value: nRB.jumlahPakai, onChange: (e) => setNRB((x) => ({ ...x, jumlahPakai: e.target.value })), style: { width: 80 } }),
         React.createElement("button", { className: "btn-primary btn-sm", onClick: addRB }, "+")
@@ -8414,8 +8415,39 @@ function useConfirm() {
     };
     const editB = (b) => { setNB({ editId: b.id, nama: b.nama, hargaBeli: String(b.hargaBeli), isiBeli: b.isiBeli != null ? String(b.isiBeli) : "", satuanStok: b.satuanStok || "gram", takaranPerPcs: b.takaranPerPcs != null ? String(b.takaranPerPcs) : "", kapasitas: String(b.kapasitas || ""), satuanBeli: b.satuanBeli || "" }); };
 
-    const delB = (id) => { const u = bahan.filter((x) => x.id !== id); S.set("bahanPokok", u); setBahan(u); pushNotif("Bahan dihapus.", "warning"); };
-    const askDelB = (b) => confirmAsk({ title: "Hapus Bahan", message: `Yakin hapus "${b.nama}"?`, onConfirm: () => delB(b.id) });
+    const delB = async (id, nama) => {
+      try {
+        // Cek dulu apakah bahan ini punya riwayat (pembelian/produksi/ledger stok) —
+        // kalau ada, hapus permanen akan gagal (data riwayat butuh bahan ini tetap
+        // ada). Jadi ARSIPKAN saja: bahan gak muncul lagi di pilihan baru, tapi
+        // riwayat lama tetap valid dan bisa dibuka.
+        const [mp, pb, pml, msl] = await Promise.all([
+          sb.from("material_purchases").select("id").eq("bahan_id", id).limit(1),
+          sb.from("pengambilanBelanja").select("id").eq("bahanId", id).limit(1),
+          sb.from("production_material_lines").select("id").eq("bahan_id", id).limit(1),
+          sb.from("material_stock_ledger").select("id").eq("bahan_id", id).limit(1)
+        ]);
+        const punyaRiwayat = [mp, pb, pml, msl].some((r) => Array.isArray(r.data) && r.data.length > 0);
+
+        if (punyaRiwayat) {
+          const { error } = await sb.from("bahanPokok").update({ active: false }).eq("id", id);
+          if (error) throw error;
+          const u = bahan.map((x) => x.id === id ? { ...x, active: false } : x);
+          S.setLocal("bahanPokok", u); setBahan(u);
+          pushNotif(`"${nama}" sudah punya riwayat pembelian/produksi, jadi diARSIPKAN (bukan dihapus permanen) — riwayat lama tetap aman, tapi gak muncul lagi di pilihan bahan baru.`, "warning");
+          return;
+        }
+
+        const { error } = await sb.from("bahanPokok").delete().eq("id", id);
+        if (error) throw error;
+        const u = bahan.filter((x) => x.id !== id);
+        S.setLocal("bahanPokok", u); setBahan(u);
+        pushNotif("Bahan dihapus permanen (belum ada riwayat pemakaian).", "warning");
+      } catch (e) {
+        pushNotif("Gagal menghapus bahan: " + (e?.message || String(e)), "warning");
+      }
+    };
+    const askDelB = (b) => confirmAsk({ title: "Hapus Bahan", message: `Yakin hapus "${b.nama}"? Kalau bahan ini sudah pernah dibeli/dipakai produksi, otomatis akan DIARSIPKAN saja (bukan hilang permanen) supaya riwayat lama tidak rusak.`, onConfirm: () => delB(b.id, b.nama) });
 
     const saveMenu = (m) => {
       const all = S.get("menuVarian") || [];
@@ -8954,14 +8986,31 @@ function useConfirm() {
       pushNotif("Toko diperbarui!", "success");
     };
 
-    const del = (id) => { 
+    const del = async (id) => {
       const b = branches.find(x=>x.id===id);
       if (b && b.type === "central_kitchen" && branches.filter(x=>x.type==="central_kitchen").length===1) {
         pushNotif("Tidak bisa hapus dapur pusat terakhir — minimal 1 dapur harus ada.", "warning"); return;
       }
-      const u = branches.filter((x) => x.id !== id); S.set("branches", u); setBranches(u); pushNotif("Toko dihapus.", "warning"); 
+      // Coba hapus permanen dulu. Cabang yang sudah pernah dipakai transaksi/
+      // absensi/dll akan gagal (foreign key) — kalau begitu, arsipkan saja
+      // (active:false) supaya riwayat lama tetap valid, tapi cabang ini gak
+      // muncul lagi buat dipilih baru.
+      const { error } = await sb.from("branches").delete().eq("id", id);
+      if (error) {
+        if (error.code === "23503") {
+          const { error: archErr } = await sb.from("branches").update({ active: false }).eq("id", id);
+          if (archErr) { pushNotif("Gagal: " + archErr.message, "warning"); return; }
+          const u = branches.map((x) => x.id === id ? { ...x, active: false } : x);
+          S.setLocal("branches", u); setBranches(u);
+          pushNotif(`"${b?.name}" sudah punya riwayat transaksi, jadi diARSIPKAN (bukan dihapus permanen) — riwayat lama tetap aman.`, "warning");
+          return;
+        }
+        pushNotif("Gagal menghapus: " + error.message, "warning");
+        return;
+      }
+      const u = branches.filter((x) => x.id !== id); S.setLocal("branches", u); setBranches(u); pushNotif("Toko dihapus permanen (belum ada riwayat).", "warning");
     };
-    const askDel = (b) => confirmAsk({ title: "Hapus toko?", message: `Yakin hapus "${b.name}" di ${b.city||'-'}? Akun pekerja yang nyambung ke toko ini jadi kehilangan cabang.`, onConfirm: () => del(b.id) });
+    const askDel = (b) => confirmAsk({ title: "Hapus toko?", message: `Yakin hapus "${b.name}" di ${b.city||'-'}? Kalau sudah punya riwayat transaksi, otomatis diarsipkan (bukan hilang permanen). Akun pekerja yang nyambung ke toko ini jadi kehilangan cabang.`, onConfirm: () => del(b.id) });
 
     const ckExists = branches.some(b=>b.type==="central_kitchen");
     const lapakCount = branches.filter(b=>b.type!=="central_kitchen").length;
@@ -9632,7 +9681,7 @@ function SettingAkun({ pushNotif }) {
           }
         },
           React.createElement("option", { value: "" }, "-- Pilih --"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         formErrors.branchId && React.createElement("p", { className: "field-warning" }, formErrors.branchId)
       ),
@@ -9761,8 +9810,23 @@ function SettingAkun({ pushNotif }) {
       S.set("investors", u); setInvestors(u); setForm({ nama: "", persenBagi: "" });
       pushNotif("Investor ditambahkan!", "success");
     };
-    const del = (id) => { const u = investors.filter((x) => x.id !== id); S.set("investors", u); setInvestors(u); pushNotif("Investor dihapus.", "warning"); };
-    const askDel = (inv) => confirmAsk({ title: "Hapus Investor", message: `Yakin hapus investor "${inv.nama}"?`, onConfirm: () => del(inv.id) });
+    const del = async (id, nama) => {
+      const { error } = await sb.from("investors").delete().eq("id", id);
+      if (error) {
+        if (error.code === "23503") {
+          const { error: archErr } = await sb.from("investors").update({ active: false }).eq("id", id);
+          if (archErr) { pushNotif("Gagal: " + archErr.message, "warning"); return; }
+          const u = investors.map((x) => x.id === id ? { ...x, active: false } : x);
+          S.setLocal("investors", u); setInvestors(u);
+          pushNotif(`"${nama}" sudah punya riwayat laporan/undangan, jadi diARSIPKAN (bukan dihapus permanen).`, "warning");
+          return;
+        }
+        pushNotif("Gagal menghapus: " + error.message, "warning");
+        return;
+      }
+      const u = investors.filter((x) => x.id !== id); S.setLocal("investors", u); setInvestors(u); pushNotif("Investor dihapus permanen.", "warning");
+    };
+    const askDel = (inv) => confirmAsk({ title: "Hapus Investor", message: `Yakin hapus investor "${inv.nama}"? Kalau sudah punya riwayat laporan, otomatis diarsipkan.`, onConfirm: () => del(inv.id, inv.nama) });
     const upP = (id, p) => { const u = investors.map((x) => x.id === id ? { ...x, persenBagi: parseFloat(p) || 0 } : x); S.set("investors", u); setInvestors(u); };
     const upNama = (id, nm) => { const u = investors.map((x) => x.id === id ? { ...x, nama: nm } : x); S.set("investors", u); setInvestors(u); };
 
@@ -10844,7 +10908,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("label", { style: { fontSize: 12, color: "var(--text2)", fontWeight: 700 } }, "Lapak:"),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           branches.length === 0 && React.createElement("option", null, "Belum ada cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         )
       ),
 
@@ -11259,7 +11323,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("label", { style: { fontSize: 12, color: "var(--text2)", fontWeight: 700 } }, "Lapak:"),
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           branches.length === 0 && React.createElement("option", null, "Belum ada cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         )
       ),
 
@@ -11436,7 +11500,14 @@ function SettingAkun({ pushNotif }) {
     // pernah beda logic secara diam-diam.
     const applyScopeFilters = (query, t) => {
       let q = query;
-      if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK") q = q.eq("branchId", selBranch);
+      const NORMALIZED_TABLES = ["production_batches", "production_material_lines", "stock_transfers", "stock_transfer_lines", "finished_stock_ledger", "material_stock_ledger", "material_purchases"];
+      const branchCol = NORMALIZED_TABLES.includes(t) ? "branch_id" : "branchId";
+      // production_material_lines/stock_transfer_lines tidak punya branch_id/date
+      // langsung di baris mereka sendiri (nempel lewat batch_id/transfer_id) —
+      // jangan coba filter kolom yang tidak ada di tabel itu.
+      const hasBranchCol = !["production_material_lines", "stock_transfer_lines"].includes(t);
+      const hasDateCol = !["production_material_lines", "stock_transfer_lines"].includes(t);
+      if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK" && hasBranchCol) q = q.eq(branchCol, selBranch);
       if (selDate) {
         if (["transactions", "pengeluaranLapak", "pengeluaranOwner", "setoranHarian", "absensi", "produksiCK", "distribusiCK", "stokTidakTerjual"].includes(t)) q = q.eq("date", selDate);
         else if (["setoranBulanan", "absensiBulanan", "gajiPembayaran"].includes(t)) q = q.eq("bulan", selDate.slice(0, 7));
@@ -11444,6 +11515,8 @@ function SettingAkun({ pushNotif }) {
           const parts = selDate.split("-");
           const tsDate = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : selDate;
           q = q.like("ts", `${tsDate},%`);
+        } else if (NORMALIZED_TABLES.includes(t) && hasDateCol) {
+          q = q.eq("date", selDate);
         }
       }
       return q;
@@ -11596,7 +11669,7 @@ function SettingAkun({ pushNotif }) {
       { label: "Edit Log", icon: "\uD83D\uDCDD", fn: () => doClear("Edit Log", ["editLog"], ["editLog"]) },
       { label: "Stok di toko", icon: "\uD83D\uDCE6", fn: () => doClear("Stok di toko", ["stokLapak"], ["stokLapak"]) },
       { label: "Donat tidak terjual", icon: "\uD83D\uDCC9", fn: () => doClear("Donat tidak terjual", ["stokTidakTerjual"], ["stokTidakTerjual"]) },
-      { label: "Produksi & Distribusi CK", icon: "\uD83C\uDF69", fn: () => doClear("Produksi & Distribusi CK", ["produksiCK", "distribusiCK"], ["produksiCK", "distribusiCK"]) },
+      { label: "Produksi & Distribusi CK", icon: "\uD83C\uDF69", fn: () => doClear("Produksi & Distribusi CK", ["produksiCK", "distribusiCK", "production_batches", "stock_transfers", "finished_stock_ledger"], ["produksiCK", "distribusiCK"]) },
     ];
 
     return React.createElement("div", null,
@@ -11605,7 +11678,7 @@ function SettingAkun({ pushNotif }) {
       React.createElement("div", { className: "filter-bar mb8" },
         React.createElement("select", { className: "inp inp-sm", value: selBranch, onChange: (e) => setSelBranch(e.target.value) },
           React.createElement("option", { value: "" }, "-- Semua Cabang --"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("input", { type: "date", className: "inp inp-sm", value: selDate, onChange: (e) => setSelDate(e.target.value) })
       ),
@@ -12838,7 +12911,7 @@ function SettingAkun({ pushNotif }) {
               onChange: (e) => setRestok((f) => ({ ...f, bahanId: e.target.value }))
             },
               React.createElement("option", { value: "" }, "-- pilih: kentang, terigu, dll --"),
-              bahan.map((b) => React.createElement("option", { key: b.id, value: b.id },
+              bahan.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id },
                 b.nama, " · sisa ", Number(saldoMap[b.id] || 0).toLocaleString("id-ID"),
                 " donat · beli ", fmtRp(b.hargaBeli)
               ))
@@ -13099,7 +13172,7 @@ function SettingAkun({ pushNotif }) {
               onChange: (e) => setForm((f) => ({ ...f, bahanId: e.target.value }))
             },
               React.createElement("option", { value: "" }, "-- pilih bahan --"),
-              bahan.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama))
+              bahan.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama))
             )
           ),
           React.createElement("div", { className: "field-group" },
@@ -13144,7 +13217,7 @@ function SettingAkun({ pushNotif }) {
             onChange: (e) => setFilterBahan(e.target.value)
           },
             React.createElement("option", { value: "" }, "Semua bahan"),
-            bahan.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama))
+            bahan.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.nama))
           )
         ),
         filteredLedger.length === 0 && React.createElement(EmptyState, { icon: "📦", title: "Belum ada keluar-masuk", desc: "Muncul setelah beli, produksi, atau koreksi." }),
@@ -13218,7 +13291,7 @@ function SettingAkun({ pushNotif }) {
         React.createElement("input", { type: "month", className: "inp inp-sm", value: bulan, onChange: (e) => setBulan(e.target.value) }),
         React.createElement("select", { className: "inp inp-sm", value: branchId, onChange: (e) => setBranchId(e.target.value) },
           React.createElement("option", { value: "all" }, "Semua cabang"),
-          branches.map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
+          branches.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id }, b.name + (b.type === "central_kitchen" ? " (Dapur Pusat)" : b.type === "investasi" ? " (Investasi)" : "")))
         ),
         React.createElement("button", { className: "btn-secondary", onClick: exportAk }, "Export Excel")
       ),
