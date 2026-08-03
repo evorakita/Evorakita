@@ -1216,7 +1216,7 @@ var EvoraDonuts = (() => {
   var HISTORY_MODE_DB_KEY = "history_mode";
   var JADWAL_LIBUR_DB_KEY = "jadwal_libur";
   var JADWAL_LIBUR_ALLOWED_DAYS = new Set(["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]);
-  var isActiveProfile = (profile) => !!profile && profile.role !== "none" && profile.status !== "deleted" && profile.aktif !== false && !profile.deleted_at && !profile.deletedAt;
+  var isActiveProfile = (profile) => !!profile && profile.role !== "none" && profile.status !== "deleted" && profile.active !== false && !profile.deleted_at && !profile.deletedAt;
   // ─── Area Manager (multi-kota scale) ─────────────────────────────────────
   // profile.role === "manager"
   // profile.cities = ["Karawang","Bandung"]  (atau profile.city string tunggal)
@@ -8567,8 +8567,8 @@ function useConfirm() {
             )
           ),
           React.createElement("tbody", null,
-            bahan.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: 5, style: { padding: 16 } }, React.createElement(EmptyState, { icon: "\uD83C\uDF3E", title: "Belum ada bahan", desc: "Isi form di bawah: nama, harga beli, jadi berapa pcs donat." }))),
-            bahan.map((b) =>
+            bahan.filter((b) => b.active !== false).length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: 5, style: { padding: 16 } }, React.createElement(EmptyState, { icon: "\uD83C\uDF3E", title: "Belum ada bahan", desc: "Isi form di bawah: nama, harga beli, jadi berapa pcs donat." }))),
+            bahan.filter((b) => b.active !== false).map((b) =>
               React.createElement("tr", { key: b.id },
                 React.createElement("td", null, b.nama, b.satuanBeli ? React.createElement("span", { style: { fontSize: 11, color: "var(--text2)", marginLeft: 4 } }, "(", b.satuanBeli, ")") : null),
                 React.createElement("td", null, fmtRp(b.hargaBeli)),
@@ -9030,7 +9030,7 @@ function useConfirm() {
       
       // Daftar cabang dengan bahasa warung
       React.createElement("div", { className: "branch-list mt8" },
-        branches.slice().sort((a,b)=> (a.type==="central_kitchen"?-1:1)).map((b) =>
+        branches.filter((b) => b.active !== false).slice().sort((a,b)=> (a.type==="central_kitchen"?-1:1)).map((b) =>
           React.createElement("div", { key: b.id, className: "branch-row", style: { borderLeft: b.type==="central_kitchen"?"4px solid var(--accent)":"4px solid var(--border)" } },
             React.createElement("div", { style: { flex: 1 } },
               React.createElement("div", { style: { display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" } },
@@ -9833,8 +9833,8 @@ function SettingAkun({ pushNotif }) {
     return React.createElement("div", null,
       React.createElement("h3", { className: "section-title mt8" }, "Kelola Investor"),
       React.createElement("p", { className: "info-txt" }, "Persen bagi hasil = bagian investor dari laba cabang investasi (bukan dari omzet kotor). Contoh: 40 = investor 40%, toko 60%."),
-      investors.length === 0 && React.createElement(EmptyState, { icon: "\uD83E\uDD1D", title: "Belum ada investor", desc: "Tambah investor lalu pasang di cabang tipe investasi." }),
-      investors.map((inv) =>
+      investors.filter((inv) => inv.active !== false).length === 0 && React.createElement(EmptyState, { icon: "\uD83E\uDD1D", title: "Belum ada investor", desc: "Tambah investor lalu pasang di cabang tipe investasi." }),
+      investors.filter((inv) => inv.active !== false).map((inv) =>
         React.createElement("div", { key: inv.id, className: "investor-row" },
           React.createElement("input", { className: "inp inp-sm", value: inv.nama, onChange: (e) => upNama(inv.id, e.target.value), style: { flex: 1, minWidth: 100, fontWeight: 700 }, "aria-label": "Nama investor" }),
           React.createElement("div", { className: "row-wrap" },
