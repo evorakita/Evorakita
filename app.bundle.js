@@ -7325,6 +7325,14 @@ function useConfirm() {
     // (misalnya kalau ternyata masih locked=true dan ditolak RLS diam-diam).
     const hapusSetoranHarian = async (id) => {
       try {
+        // Kalau setoran ini ada selisih kas yang otomatis bikin catatan
+        // pengeluaran (pengeluaranOwner.setoranId), hapus dulu catatan itu —
+        // itu turunan dari setoran ini, jadi wajar ikut hilang, dan supaya
+        // gak kena foreign key error pas hapus setorannya.
+        const { data: pengOwnerTerkait } = await sb.from("pengeluaranOwner").select("id, jumlah").eq("setoranId", id);
+        if (pengOwnerTerkait && pengOwnerTerkait.length > 0) {
+          await sb.from("pengeluaranOwner").delete().eq("setoranId", id);
+        }
         const { data, error } = await sb.from("setoranHarian").delete().eq("id", id).select();
         if (error) throw error;
         if (!data || data.length === 0) {
@@ -7332,8 +7340,9 @@ function useConfirm() {
           return;
         }
         await S.loadKey("setoranHarian");
+        if (pengOwnerTerkait && pengOwnerTerkait.length > 0) await S.loadKey("pengeluaranOwner");
         refresh();
-        pushNotif("Setoran berhasil dihapus permanen.", "success");
+        pushNotif("Setoran berhasil dihapus permanen." + (pengOwnerTerkait?.length ? " Catatan selisih kas otomatis yang nempel ikut dihapus." : ""), "success");
       } catch (e) {
         pushNotif(e?.message || String(e), "warning");
       }
@@ -8351,7 +8360,7 @@ function useConfirm() {
       }
     }, [initialSub]);
     const [bahan, setBahan] = useState(() => S.get("bahanPokok") || []);
-    const [menus, setMenus] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe !== "paket"));
+    const [menus, setMenus] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe !== "paket" && m.active !== false));
     const [topings, setTopings] = useState(() => S.get("topingTambahan") || []);
     const [editMenu, setEditMenu] = useState(null);
     const [confirmAsk, confirmModal] = useConfirm();
@@ -8472,7 +8481,24 @@ function useConfirm() {
       }
     };
 
-    const delMenu = (id) => { const u = (S.get("menuVarian") || []).filter((x) => x.id !== id); S.set("menuVarian", u); setMenus(u.filter((x) => x.tipe !== "paket")); pushNotif("Menu dihapus.", "warning"); };
+    const delMenu = async (id) => {
+      const { error } = await sb.from("menuVarian").delete().eq("id", id);
+      if (error) {
+        if (error.code === "23503") {
+          const { error: archErr } = await sb.from("menuVarian").update({ active: false }).eq("id", id);
+          if (archErr) { pushNotif("Gagal: " + archErr.message, "warning"); return; }
+          const u = (S.get("menuVarian") || []).map((x) => x.id === id ? { ...x, active: false } : x);
+          S.setLocal("menuVarian", u); setMenus(u.filter((x) => x.tipe !== "paket" && x.active !== false));
+          pushNotif("Menu ini masih dipakai sebagai menu dasar box lain, jadi diARSIPKAN (bukan dihapus permanen) — box yang pakai menu ini tetap aman.", "warning");
+          return;
+        }
+        pushNotif("Gagal menghapus menu: " + error.message, "warning");
+        return;
+      }
+      const u = (S.get("menuVarian") || []).filter((x) => x.id !== id);
+      S.setLocal("menuVarian", u); setMenus(u.filter((x) => x.tipe !== "paket"));
+      pushNotif("Menu dihapus permanen.", "warning");
+    };
     const askDelMenu = (m) => confirmAsk({ title: "Hapus Menu", message: `Yakin hapus menu ${m.nama}?`, onConfirm: () => delMenu(m.id) });
 
     const saveT = () => {
@@ -8891,7 +8917,7 @@ function useConfirm() {
   // ─── SettingPaket ──────────────────────────────────────────────────────────
   function SettingPaket({ pushNotif }) {
     const tick = useStoreTick();
-    const [pakets, setPakets] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe === "paket"));
+    const [pakets, setPakets] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe === "paket" && m.active !== false));
     const [bahan] = useState(() => S.get("bahanPokok") || []);
     const [editP, setEditP] = useState(null);
     const [confirmAsk, confirmModal] = useConfirm();
@@ -8905,7 +8931,24 @@ function useConfirm() {
       setEditP(null); pushNotif("Box disimpan!", "success");
     };
 
-    const del = (id) => { const u = (S.get("menuVarian") || []).filter((x) => x.id !== id); S.set("menuVarian", u); setPakets(u.filter((x) => x.tipe === "paket")); pushNotif("Box dihapus.", "warning"); };
+    const del = async (id) => {
+      const { error } = await sb.from("menuVarian").delete().eq("id", id);
+      if (error) {
+        if (error.code === "23503") {
+          const { error: archErr } = await sb.from("menuVarian").update({ active: false }).eq("id", id);
+          if (archErr) { pushNotif("Gagal: " + archErr.message, "warning"); return; }
+          const u = (S.get("menuVarian") || []).map((x) => x.id === id ? { ...x, active: false } : x);
+          S.setLocal("menuVarian", u); setPakets(u.filter((x) => x.tipe === "paket" && x.active !== false));
+          pushNotif("Box ini masih dipakai/dirujuk menu lain, jadi diARSIPKAN (bukan dihapus permanen).", "warning");
+          return;
+        }
+        pushNotif("Gagal menghapus box: " + error.message, "warning");
+        return;
+      }
+      const u = (S.get("menuVarian") || []).filter((x) => x.id !== id);
+      S.setLocal("menuVarian", u); setPakets(u.filter((x) => x.tipe === "paket"));
+      pushNotif("Box dihapus permanen.", "warning");
+    };
     const askDel = (p) => confirmAsk({ title: "Hapus Box", message: `Yakin hapus box "${p.nama}"?`, onConfirm: () => del(p.id) });
 
     return React.createElement("div", null,
