@@ -2508,27 +2508,44 @@ var EvoraDonuts = (() => {
     return { ok: true, id: row.id, jumlah };
   };
   var batalkanPemakaianProduksi = async (produksiId) => {
-    if (!produksiId) return;
-    const ledger = getStokBahanLedger();
-    const related = ledger.filter((e) => e.refType === "produksiCK" && e.refId === produksiId && e.tipe === "produksi");
-    if (!related.length) return { ok: true, reversed: 0 };
-    // jangan dobel retur
-    const already = new Set(ledger.filter((e) => e.tipe === "retur_produksi" && e.refId === produksiId).map((e) => e.bahanId + ":" + e.qty));
-    const rows = related.filter((e) => !already.has(e.bahanId + ":" + e.qty)).map((e) => ({
-      bahanId: e.bahanId,
-      bahanNama: e.bahanNama,
-      tipe: "retur_produksi",
-      qty: e.qty,
+    if (!produksiId) return { ok: true, reversed: 0 };
+    // Cari pemakaian bahan ASLI untuk produksi ini di material_stock_ledger —
+    // ini tempat yang BENERAN dipakai buat motong stok (bukan ledger app_settings
+    // lama yang sudah gak dipakai lagi, itu yang bikin bug "bahan gak balik").
+    const { data: pemakaian, error: errPemakaian } = await sb
+      .from("material_stock_ledger")
+      .select("*")
+      .eq("source_id", produksiId)
+      .eq("direction", "out")
+      .in("source_type", ["produksiCK", "produksi"]);
+    if (errPemakaian) throw errPemakaian;
+    if (!pemakaian || !pemakaian.length) return { ok: true, reversed: 0 };
+
+    // Jangan dobel retur kalau sudah pernah dibalikin sebelumnya
+    const { data: sudahRetur } = await sb
+      .from("material_stock_ledger")
+      .select("id")
+      .eq("source_id", produksiId)
+      .eq("source_type", "retur_produksi")
+      .limit(1);
+    if (sudahRetur && sudahRetur.length) return { ok: true, reversed: 0 };
+
+    const rows = pemakaian.map((e) => ({
+      area_id: e.area_id,
+      branch_id: e.branch_id,
+      bahan_id: e.bahan_id,
       date: today(),
+      direction: "in",
+      quantity: e.quantity,
+      unit_cost: e.unit_cost,
+      source_type: "retur_produksi",
+      source_id: produksiId,
       note: "Retur stok karena hapus produksi",
-      refType: "produksiCK",
-      refId: produksiId,
-      menuId: e.menuId,
-      menuNama: e.menuNama,
-      qtyMenu: e.qtyMenu
     }));
-    if (rows.length) await catatStokBahanRows(rows);
-          await loadStokBahanFromDb().catch(() => {});
+    const { error: errInsert } = await sb.from("material_stock_ledger").insert(rows);
+    if (errInsert) throw errInsert;
+    await S.loadKey("material_stock_ledger").catch(() => {});
+    await loadStokBahanFromDb().catch(() => {});
     return { ok: true, reversed: rows.length };
   };
 
