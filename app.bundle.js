@@ -1158,19 +1158,16 @@ var EvoraDonuts = (() => {
   }
 
   var upsertStokLapak = async (branchId, menuId, newStok, existingRow) => {
-    const payloadFull = { stok: newStok, lastUpdate: nowIso() };
-    const payloadBasic = { stok: newStok };
-    let res;
-    if (existingRow) {
-      res = await sb.from("stokLapak").update(payloadFull).eq("id", existingRow.id);
-      if (res.error && /lastUpdate|column/i.test(res.error.message || "")) {
-        res = await sb.from("stokLapak").update(payloadBasic).eq("id", existingRow.id);
-      }
-    } else {
-      res = await sb.from("stokLapak").insert([{ id: uid(), branchId, menuId, ...payloadFull }]);
-      if (res.error && /lastUpdate|column/i.test(res.error.message || "")) {
-        res = await sb.from("stokLapak").insert([{ id: uid(), branchId, menuId, ...payloadBasic }]);
-      }
+    // PENTING: jangan andalkan "existingRow" dari cache lokal buat mutusin
+    // insert-vs-update — kalau cache-nya basi (misal ada 2 konfirmasi hampir
+    // bareng, atau baris itu dibuat dari alur lain), bisa nyoba INSERT ke baris
+    // yang sebenarnya udah ada → duplicate key error. Pakai UPSERT asli dari
+    // database (ON CONFLICT branchId+menuId) supaya aman dari race condition.
+    const payloadFull = { branchId, menuId, stok: newStok, lastUpdate: nowIso() };
+    const payloadBasic = { branchId, menuId, stok: newStok };
+    let res = await sb.from("stokLapak").upsert([payloadFull], { onConflict: "branchId,menuId" });
+    if (res.error && /lastUpdate|column/i.test(res.error.message || "")) {
+      res = await sb.from("stokLapak").upsert([payloadBasic], { onConflict: "branchId,menuId" });
     }
     if (res.error) throw res.error;
     return res;
@@ -3176,7 +3173,7 @@ function useConfirm() {
       setCart((c) => {
         const ex = c.find((x) => x.menuId === menu.id);
         if (ex) return c.map((x) => x.menuId === menu.id ? { ...x, qty: x.qty + 1 } : x);
-        return [...c, { id: uid(), menuId: menu.id, topingId: null, nama: menu.nama, tipe: menu.tipe || "satuan", isiBox: menu.isiBox || null, hargaJual: menu.hargaJual, hpp: hitungHPP(menu), qty: 1 }];
+        return [...c, { id: uid(), menuId: menu.id, topingId: null, nama: menu.nama, tipe: menu.tipe || "satuan", isiBox: menu.isiBox || null, hargaJual: menu.hargaJual, hpp: (getMenuHPPBreakdown(menu)?.hppSatuanPerPcs || 0), qty: 1 }];
       });
     };
 
@@ -3196,7 +3193,7 @@ function useConfirm() {
           nama: menu.nama + (glaze ? " (" + glaze.nama + ")" : ""),
           tipe: menu.tipe || "satuan", isiBox: null,
           glazeId: glaze ? glaze.id : null, glazeNama: glaze ? glaze.nama : null,
-          hargaJual: menu.hargaJual, hpp: hitungHPP(menu), qty: 1
+          hargaJual: menu.hargaJual, hpp: (getMenuHPPBreakdown(menu)?.hppSatuanPerPcs || 0), qty: 1
         }];
       });
       setGlazePick(null);
@@ -3214,7 +3211,7 @@ function useConfirm() {
       }
       const baseId = menu.baseMenuId;
       const baseMenu = menus.find((m) => m.id === baseId);
-      const hppPolos = baseMenu ? hitungHPP(baseMenu) : 0;
+      const hppPolos = baseMenu ? (getMenuHPPBreakdown(baseMenu)?.hppSatuanPerPcs || 0) : 0;
       const boxCost = roundHppRp(parseFloat(menu.boxCost || 0) || 0);
       // Hitung glaze porsi cost + toping. Toping ke-2 dst per slot = berbayar.
       let hppTotal = boxCost;
@@ -3276,7 +3273,7 @@ function useConfirm() {
       const rasaNama = [];
       for (const mid of isian) {
         const md = menus.find((m) => m.id === mid);
-        if (md) { hppIsi += hitungHPP(md); rasaNama.push(md.nama); }
+        if (md) { hppIsi += (getMenuHPPBreakdown(md)?.hppSatuanPerPcs || 0); rasaNama.push(md.nama); }
       }
       const hppToping = toping.reduce((a, t) => a + (t.hpp || 0), 0);
       const hargaToping = toping.reduce((a, t) => a + (t.hargaJual || 0), 0);
@@ -3733,7 +3730,7 @@ function useConfirm() {
         const qtyBaru = Math.max(0, total - qtyLama);
         return {
           menuId: s.menuId, menuNama: menuDef?.nama || s.menuId,
-          hpp: menuDef ? hitungHPP(menuDef) : 0,
+          hpp: menuDef ? (getMenuHPPBreakdown(menuDef)?.hppSatuanPerPcs || 0) : 0,
           qtyLama, qtyBaru, aksiBaru: "bawa", stokRow: s
         };
       });
@@ -11620,7 +11617,7 @@ function SettingAkun({ pushNotif }) {
       // jangan coba filter kolom yang tidak ada di tabel itu.
       const hasBranchCol = !["production_material_lines", "stock_transfer_lines"].includes(t);
       const hasDateCol = !["production_material_lines", "stock_transfer_lines"].includes(t);
-      if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK" && hasBranchCol) q = q.eq(branchCol, selBranch);
+      if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK" && t !== "pengambilanBelanja" && t !== "material_purchases" && t !== "material_stock_ledger" && hasBranchCol) q = q.eq(branchCol, selBranch);
       if (selDate) {
         if (["transactions", "pengeluaranLapak", "pengeluaranOwner", "setoranHarian", "absensi", "produksiCK", "distribusiCK", "stokTidakTerjual"].includes(t)) q = q.eq("date", selDate);
         else if (["setoranBulanan", "absensiBulanan", "gajiPembayaran"].includes(t)) q = q.eq("bulan", selDate.slice(0, 7));
@@ -11669,7 +11666,7 @@ function SettingAkun({ pushNotif }) {
         const previewCounts = tables.map(t => {
           const data = S.get(t) || [];
           let filtered = data;
-          if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK") filtered = filtered.filter(r => r.branchId === selBranch || r.branchId === undefined);
+          if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK" && t !== "pengambilanBelanja" && t !== "material_purchases" && t !== "material_stock_ledger") filtered = filtered.filter(r => r.branchId === selBranch || r.branchId === undefined);
           if (selDate) {
             if (["transactions", "pengeluaranLapak", "pengeluaranOwner", "setoranHarian", "absensi", "produksiCK", "distribusiCK", "stokTidakTerjual"].includes(t)) filtered = filtered.filter(r => r.date === selDate);
             else if (["setoranBulanan", "absensiBulanan", "gajiPembayaran"].includes(t)) filtered = filtered.filter(r => (r.bulan||"").startsWith(selDate.slice(0,7)));
@@ -11738,7 +11735,7 @@ function SettingAkun({ pushNotif }) {
         const previewCounts = tables.map(t => {
           const data = S.get(t) || [];
           let filtered = data;
-          if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK") filtered = filtered.filter(r => r.branchId === selBranch || r.branchId === undefined);
+          if (selBranch && t !== "pengeluaranOwner" && t !== "produksiCK" && t !== "pengambilanBelanja" && t !== "material_purchases" && t !== "material_stock_ledger") filtered = filtered.filter(r => r.branchId === selBranch || r.branchId === undefined);
           if (selDate && ["transactions", "pengeluaranLapak", "pengeluaranOwner", "setoranHarian", "absensi", "produksiCK", "distribusiCK", "stokTidakTerjual"].includes(t)) filtered = filtered.filter(r => r.date === selDate);
           return { table: t, count: filtered.length };
         });
@@ -11783,6 +11780,7 @@ function SettingAkun({ pushNotif }) {
       { label: "Stok di toko", icon: "\uD83D\uDCE6", fn: () => doClear("Stok di toko", ["stokLapak"], ["stokLapak"]) },
       { label: "Donat tidak terjual", icon: "\uD83D\uDCC9", fn: () => doClear("Donat tidak terjual", ["stokTidakTerjual"], ["stokTidakTerjual"]) },
       { label: "Produksi & Distribusi CK", icon: "\uD83C\uDF69", fn: () => doClear("Produksi & Distribusi CK", ["produksiCK", "distribusiCK", "production_batches", "stock_transfers", "finished_stock_ledger"], ["produksiCK", "distribusiCK"]) },
+      { label: "Beli Bahan & Stok Gudang", icon: "\uD83E\uDDFA", fn: () => doClear("Beli Bahan & Stok Gudang", ["pengambilanBelanja", "material_purchases", "material_stock_ledger"], ["pengambilanBelanja"]) },
     ];
 
     return React.createElement("div", null,
@@ -12714,7 +12712,7 @@ function SettingAkun({ pushNotif }) {
         qtykapasitas = nBatch * kap;
       } else {
         qtykapasitas = parseFloat(restok.qtykapasitas || "0");
-        if (!qtyYield || qtyYield <= 0) { pushNotif("Isi jadi berapa donat.", "warning"); return; }
+        if (!qtykapasitas || qtykapasitas <= 0) { pushNotif("Isi jadi berapa donat.", "warning"); return; }
       }
       const bayar = parseFloat(restok.jumlahBayar || "0");
       if (!bayar || bayar <= 0) { pushNotif("Isi habis berapa uang (Rp).", "warning"); return; }
