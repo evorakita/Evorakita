@@ -17,6 +17,7 @@ var EvoraDonuts = (() => {
     { key: "gudang",     label: "Beli bahan",       icon: "\uD83E\uDDFA" },
     { key: "pesanan",    label: "Pesanan",      icon: "\uD83D\uDCCB" },
     { key: "produksiCK", label: "Dapur pusat",     icon: "\uD83C\uDF69" },
+    { key: "kurir",       label: "Kurir",         icon: "\uD83D\uDEF5" },
     { key: "stokToping", label: "Toping",       icon: "\uD83E\uDD53" },
     { key: "tutupBuku",  label: "Tutup bulan",  icon: "\uD83D\uDCD5" },
     { key: "setting",    label: "Pengaturan",   icon: "\u2699\uFE0F" },
@@ -30,6 +31,7 @@ var EvoraDonuts = (() => {
     { group: "stok", label: "Bahan & Dapur", icon: "\uD83E\uDDFA", children: [
       { key: "gudang", label: "Beli bahan", icon: "\uD83E\uDDFA" },
       { key: "produksiCK", label: "Dapur pusat", icon: "\uD83C\uDF69" },
+      { key: "kurir", label: "Kurir", icon: "\uD83D\uDEF5" },
       { key: "stokToping", label: "Stok toping", icon: "\uD83E\uDD53" },
     ]},
     { group: "keuangan", label: "Keuangan harian", icon: "\uD83D\uDCB5", children: [
@@ -55,6 +57,7 @@ var EvoraDonuts = (() => {
     { group: "stok", label: "Bahan & Dapur", icon: "\uD83E\uDDFA", children: [
       { key: "gudang", label: "Beli bahan", icon: "\uD83E\uDDFA" },
       { key: "produksiCK", label: "Dapur pusat", icon: "\uD83C\uDF69" },
+      { key: "kurir", label: "Kurir", icon: "\uD83D\uDEF5" },
     ]},
     { group: "keuangan", label: "Keuangan harian", icon: "\uD83D\uDCB5", children: [
       { key: "setoran", label: "Setoran", icon: "\uD83D\uDCB0" },
@@ -347,6 +350,14 @@ var EvoraDonuts = (() => {
 
   // ─── Formatters ────────────────────────────────────────────────────────────
   var fmtRp = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
+  // Buat INPUT uang (bukan cuma tampilan): "10000" -> "10.000" waktu diketik,
+  // dan sebaliknya buat disimpan/dihitung.
+  var fmtRibuan = (v) => {
+    const digits = String(v ?? "").replace(/[^\d]/g, "");
+    if (!digits) return "";
+    return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  };
+  var parseRibuan = (v) => String(v ?? "").replace(/[^\d]/g, "");
 
   // ─── Helper styling Excel (xlsx-js-style). Hasil tetap file .xlsx. ───────────
   // Membuat header tebal + warna, border tipis semua sel, lebar kolom otomatis,
@@ -2674,6 +2685,25 @@ function EmptyState({ icon, title, desc, actionLabel, onAction }) {
   );
 }
 
+// Ikon "?" — panduan/cara pakai disembunyikan sampai diketuk, biar layar gak
+// penuh kotak info kayak sebelumnya (mirip pola aplikasi profesional).
+function InfoHelp({ children, label }) {
+  const [open, setOpen] = React.useState(false);
+  return React.createElement("div", { style: { display: "inline-block", marginBottom: open ? 8 : 0 } },
+    React.createElement("button", {
+      type: "button",
+      "aria-label": label || "Info / cara pakai",
+      onClick: () => setOpen((v) => !v),
+      style: {
+        width: 22, height: 22, borderRadius: "50%", border: "1px solid var(--border)",
+        background: open ? "var(--accent)" : "var(--bg2)", color: open ? "#fff" : "var(--text2)",
+        fontSize: 12, fontWeight: 700, lineHeight: "20px", cursor: "pointer", padding: 0
+      }
+    }, "?"),
+    open && React.createElement("div", { className: "info-txt", style: { marginTop: 6 } }, children)
+  );
+}
+
 // Skeleton — loading placeholder (Batch 7: tidak ada skeleton loading 0 → sekarang ada)
 function SkeletonLine({ w, h }) {
   return React.createElement("div", { className: "skeleton-line", style:{width: w||"100%", height: h||12, borderRadius:8, background:"var(--bg3)", animation:"evoraPulse 1.2s ease-in-out infinite"} });
@@ -2843,7 +2873,7 @@ function useConfirm() {
         ),
         React.createElement("div", { className: "field-group" },
           React.createElement("label", null, "Jumlah (Rp)"),
-          React.createElement("input", { className: "inp", type: "number", value: form.jumlah, onChange: (e) => setForm((f) => ({ ...f, jumlah: e.target.value })), placeholder: "5000" })
+          React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", value: fmtRibuan(form.jumlah), onChange: (e) => setForm((f) => ({ ...f, jumlah: parseRibuan(e.target.value) })), placeholder: "5.000" })
         ),
         React.createElement("button", { className: "btn-primary", onClick: tambah }, "+ Tambah")
       ),
@@ -2853,7 +2883,7 @@ function useConfirm() {
           editId === p.id
             ? React.createElement("div", { key: p.id, className: "peng-row", style: { flexWrap: "wrap", gap: 6 } },
                 React.createElement("input", { className: "inp inp-sm", style: { flex: 2, minWidth: 120 }, value: editForm.keterangan, onChange: (e) => setEditForm((f) => ({ ...f, keterangan: e.target.value })) }),
-                React.createElement("input", { className: "inp inp-sm", type: "number", style: { flex: 1, minWidth: 90 }, value: editForm.jumlah, onChange: (e) => setEditForm((f) => ({ ...f, jumlah: e.target.value })) }),
+                React.createElement("input", { className: "inp inp-sm", type: "text", inputMode: "numeric", style: { flex: 1, minWidth: 90 }, value: fmtRibuan(editForm.jumlah), onChange: (e) => setEditForm((f) => ({ ...f, jumlah: parseRibuan(e.target.value) })) }),
                 React.createElement("button", { className: "btn-primary btn-sm", onClick: simpanEdit }, "Simpan"),
                 React.createElement("button", { className: "btn-secondary btn-sm", onClick: () => setEditId(null) }, "Batal")
               )
@@ -3896,7 +3926,15 @@ function useConfirm() {
       ),
       // Tabs
       React.createElement("div", { className: "tabs" },
-        TABS.map((t) => React.createElement("button", { key: t, className: "tab" + (tab === t ? " active" : ""), onClick: () => setTab(t) }, TAB_LABELS[t]))
+        TABS.map((t) => {
+          const badgeCount = t === "distribusi"
+            ? (S.get("distribusiCK") || []).filter((d) => d.branchId === branchId && (d.status === "pending" || d.status === "perjalanan")).length
+            : 0;
+          return React.createElement("button", { key: t, className: "tab" + (tab === t ? " active" : ""), onClick: () => setTab(t) },
+            TAB_LABELS[t],
+            badgeCount > 0 && React.createElement("span", { style: { marginLeft: 4, background: "var(--red)", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 11, fontWeight: 700 } }, badgeCount)
+          );
+        })
       ),
 
       // ── Tab: Kasir ──
@@ -4031,10 +4069,14 @@ function useConfirm() {
                         glazeList.length > 0 && React.createElement(React.Fragment, null,
                           React.createElement("div", { className: "slot-lbl" }, "Glaze (pilih 1)"),
                           React.createElement("div", { className: "slot-opts" },
-                            glazeList.map((g) => React.createElement("button", {
-                              key: g.id, type: "button", className: "slot-opt" + (s.glaze === g.id ? " on" : ""),
-                              onClick: () => setSlotGlazeAuto(i, g.id)
-                            }, g.nama))
+                            glazeList.map((g) => {
+                              const stokG = getStokTopingSaldo(branchId, g.id);
+                              return React.createElement("button", {
+                                key: g.id, type: "button", className: "slot-opt" + (s.glaze === g.id ? " on" : ""),
+                                style: stokG <= 0 ? { borderColor: "var(--red)" } : null,
+                                onClick: () => setSlotGlazeAuto(i, g.id)
+                              }, g.nama + (stokG <= 0 ? " \u26A0\uFE0F" : ""));
+                            })
                           )
                         ),
                         topingTambahanList.length > 0 && React.createElement(React.Fragment, null,
@@ -4044,10 +4086,12 @@ function useConfirm() {
                               const cur = s.toping || [];
                               const pos = cur.indexOf(t.id);
                               const bayar = pos >= 1;
+                              const stokT = getStokTopingSaldo(branchId, t.id);
                               return React.createElement("button", {
                                 key: t.id, type: "button", className: "slot-opt slot-opt-top" + (pos >= 0 ? " on" : ""),
+                                style: stokT <= 0 ? { borderColor: "var(--red)" } : null,
                                 onClick: () => toggleSlotToping(i, t.id)
-                              }, t.nama + (pos >= 0 && bayar ? " (+" + fmtRp(t.hargaJual || 0) + ")" : ""));
+                              }, t.nama + (pos >= 0 && bayar ? " (+" + fmtRp(t.hargaJual || 0) + ")" : "") + (stokT <= 0 ? " \u26A0\uFE0F" : ""));
                             })
                           )
                         )
@@ -4074,12 +4118,18 @@ function useConfirm() {
               React.createElement("div", { className: "cart-drawer-body" },
                 React.createElement("p", { className: "info-txt", style: { marginTop: 0 } }, "Harga tetap " + fmtRp(glazePick.menu.hargaJual) + ". Ketuk 1 glaze."),
                 React.createElement("div", { className: "mixbox-grid" },
-                  glazeList.map((g) => React.createElement("button", {
-                    key: g.id, type: "button", className: "mixbox-item",
-                    onClick: () => confirmGlaze(g.id)
-                  },
-                    React.createElement("span", { className: "mixbox-item-name" }, g.nama)
-                  ))
+                  glazeList.map((g) => {
+                    const stokG = getStokTopingSaldo(branchId, g.id);
+                    const habisG = stokG <= 0;
+                    return React.createElement("button", {
+                      key: g.id, type: "button", className: "mixbox-item",
+                      style: habisG ? { borderColor: "var(--red)" } : null,
+                      onClick: () => confirmGlaze(g.id)
+                    },
+                      React.createElement("span", { className: "mixbox-item-name" }, g.nama),
+                      React.createElement("span", { style: { fontSize: 10, color: habisG ? "var(--red)" : "var(--text2)", display: "block" } }, habisG ? "\u26A0\uFE0F Stok tercatat habis" : "Stok: " + stokG)
+                    );
+                  })
                 ),
                 React.createElement("button", { className: "btn-secondary mt8", style: { width: "100%" }, onClick: () => confirmGlaze(null) }, "Tanpa glaze")
               )
@@ -4166,11 +4216,13 @@ function useConfirm() {
                     React.createElement("div", { className: "mixbox-toping-row" },
                       topingTambahanList.map((tp) => {
                         const aktif = !!mixBox.toping.find((t) => t.id === tp.id);
+                        const stokTp = getStokTopingSaldo(branchId, tp.id);
                         return React.createElement("button", {
                           key: tp.id, type: "button",
                           className: "chip" + (aktif ? " chip-active" : ""),
+                          style: stokTp <= 0 ? { borderColor: "var(--red)" } : null,
                           onClick: () => toggleToping(tp)
-                        }, tp.nama + " +" + fmtRp(tp.hargaJual || 0));
+                        }, tp.nama + " +" + fmtRp(tp.hargaJual || 0) + (stokTp <= 0 ? " \u26A0\uFE0F" : ""));
                       })
                     )
                   ),
@@ -5394,7 +5446,7 @@ function useConfirm() {
           React.createElement("p", { className:"info-txt", style:{fontSize:12}}, "Tepung, kentang, minyak, gula — tiap bahan: harga 1 bungkus berapa, jadi berapa donat. App hitung modal per donat otomatis."),
           React.createElement("div", { className:"field-group"}, React.createElement("label", null, "Nama bahan"), React.createElement("input", { className:"inp", value:bahanForm.nama, onChange:e=>setBahanForm(f=>({...f, nama:e.target.value})), placeholder:"Contoh: Tepung 1kg"})),
           React.createElement("div", { className:"two-col", style:{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}},
-            React.createElement("div", { className:"field-group"}, React.createElement("label", null, "Harga 1 bungkus (Rp)"), React.createElement("input", { className:"inp", type:"number", value:bahanForm.hargaBeli, onChange:e=>setBahanForm(f=>({...f, hargaBeli:e.target.value})), placeholder:"10000"})),
+            React.createElement("div", { className:"field-group"}, React.createElement("label", null, "Harga 1 bungkus (Rp)"), React.createElement("input", { className:"inp", type:"text", inputMode:"numeric", value:fmtRibuan(bahanForm.hargaBeli), onChange:e=>setBahanForm(f=>({...f, hargaBeli:parseRibuan(e.target.value)})), placeholder:"10.000"})),
             React.createElement("div", { className:"field-group"}, React.createElement("label", null, "Jadi berapa donat"), React.createElement("input", { className:"inp", type:"number", value:bahanForm.kapasitas, onChange:e=>setBahanForm(f=>({...f, kapasitas:e.target.value})), placeholder:"20"}))
           ),
           bahanForm.hargaBeli && bahanForm.kapasitas && React.createElement("div", { className:"info-txt", style:{borderLeft:"3px solid var(--accent)", paddingLeft:8, marginBottom:8}}, "Modal per donat = ", fmtRp(Math.round(Number(bahanForm.hargaBeli)/Number(bahanForm.kapasitas)||0))),
@@ -7105,7 +7157,7 @@ function useConfirm() {
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Jumlah (Rp)"),
-            React.createElement("input", { className: "inp", type: "number", value: form.jumlah, onChange: (e) => setForm((f) => ({ ...f, jumlah: e.target.value })) })
+            React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", value: fmtRibuan(form.jumlah), onChange: (e) => setForm((f) => ({ ...f, jumlah: parseRibuan(e.target.value) })) })
           ),
           React.createElement("button", { className: "btn-primary", onClick: tambah }, "+ Tambah")
         ),
@@ -7214,7 +7266,7 @@ function useConfirm() {
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Jumlah (Rp)"),
-            React.createElement("input", { className: "inp", type: "number", value: rutinForm.jumlah, onChange: (e) => setRutinForm((f) => ({ ...f, jumlah: e.target.value })) })
+            React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", value: fmtRibuan(rutinForm.jumlah), onChange: (e) => setRutinForm((f) => ({ ...f, jumlah: parseRibuan(e.target.value) })) })
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Kategori"),
@@ -8315,7 +8367,7 @@ function useConfirm() {
       // Harga jual
       React.createElement("div", { className: "field-group" },
         React.createElement("label", null, "Harga jual ke pembeli (Rp)"),
-        React.createElement("input", { className: "inp", type: "number", value: m.hargaJual, onChange: (e) => setM((x) => ({ ...x, hargaJual: parseFloat(e.target.value) || 0 })) })
+        React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", value: fmtRibuan(m.hargaJual), onChange: (e) => setM((x) => ({ ...x, hargaJual: parseFloat(parseRibuan(e.target.value)) || 0 })) })
       ),
       // Resep Bahan Pokok
       React.createElement("h4", { className: "sub-title" }, "Bahan adonan — pakai berapa", isPaket ? " (untuk " + (m.isiBox || 1) + " pcs box)" : ""),
@@ -8590,7 +8642,7 @@ function useConfirm() {
     const SUB_LABEL = { bahan: "Bahan dasar", menu: "Menu & resep", preset: "Preset Rasa", toping: "Glaze & toping" };
 
     return React.createElement("div", null,
-      React.createElement("div", { className: "info-txt", style: { marginBottom: 8 } }, "Urutan: 1) Bahan dasar (harga + jadi berapa pcs) → 2) Glaze & toping → 3) Menu & box + resep bahan. Glaze/toping dipilih di kasir, bukan di resep tetap."),
+      React.createElement(InfoHelp, null, "Urutan: 1) Bahan dasar (harga + jadi berapa pcs) → 2) Glaze & toping → 3) Menu & box + resep bahan. Glaze/toping dipilih di kasir, bukan di resep tetap."),
       React.createElement("div", { className: "tabs tabs-sm" },
         SUB_TABS.map((t) => React.createElement("button", { key: t, className: "tab" + (sub === t ? " active" : ""), onClick: () => setSub(t) }, SUB_LABEL[t]))
       ),
@@ -8630,7 +8682,7 @@ function useConfirm() {
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Harga Beli Total (Rp)"),
-            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 10000", value: nB.hargaBeli, onChange: (e) => setNB((x) => ({ ...x, hargaBeli: e.target.value })) })
+            React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", placeholder: "Contoh: 10.000", value: fmtRibuan(nB.hargaBeli), onChange: (e) => setNB((x) => ({ ...x, hargaBeli: parseRibuan(e.target.value) })) })
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Dari 1 kemasan ini jadi berapa pcs donat?"),
@@ -8863,7 +8915,7 @@ function useConfirm() {
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Harga beli 1 kemasan (Rp)"),
-            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 40000", value: nT.hargaBeli, onChange: (e) => setNT((x) => ({ ...x, hargaBeli: e.target.value })) })
+            React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", placeholder: "Contoh: 40.000", value: fmtRibuan(nT.hargaBeli), onChange: (e) => setNT((x) => ({ ...x, hargaBeli: parseRibuan(e.target.value) })) })
           ),
           React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "1 kemasan ini cukup untuk berapa pcs donat?"),
@@ -8884,7 +8936,7 @@ function useConfirm() {
           ),
           nT.jenis === "topping" && React.createElement("div", { className: "field-group" },
             React.createElement("label", null, "Harga jual ke pembeli (Rp) — hanya toping tambahan"),
-            React.createElement("input", { className: "inp", type: "number", placeholder: "Contoh: 2000 (biaya ekstra di kasir)", value: nT.hargaJual, onChange: (e) => setNT((x) => ({ ...x, hargaJual: e.target.value })) }),
+            React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", placeholder: "Contoh: 2.000 (biaya ekstra di kasir)", value: fmtRibuan(nT.hargaJual), onChange: (e) => setNT((x) => ({ ...x, hargaJual: parseRibuan(e.target.value) })) }),
             React.createElement("p", { className: "info-txt", style: { fontSize: 11 } }, "Glaze biasanya gratis (harga donat sudah flat). Toping ekstra bisa dikenai biaya.")
           ),
           React.createElement("div", {
@@ -9749,14 +9801,15 @@ function SettingAkun({ pushNotif }) {
         React.createElement("label", null, "Gaji Harian (Rp) — opsional"),
         React.createElement("input", {
           className: "inp",
-          type: "number",
-          value: form.gajiHarian,
+          type: "text",
+          inputMode: "numeric",
+          value: fmtRibuan(form.gajiHarian),
           disabled: !!actionBusy,
           onChange: (e) => {
-            setForm((f) => ({ ...f, gajiHarian: e.target.value }));
+            setForm((f) => ({ ...f, gajiHarian: parseRibuan(e.target.value) }));
             if (formErrors.gajiHarian) setFormErrors((prev) => ({ ...prev, gajiHarian: "" }));
           },
-          placeholder: "Contoh: 50000"
+          placeholder: "Contoh: 50.000"
         }),
         formErrors.gajiHarian && React.createElement("p", { className: "field-warning" }, formErrors.gajiHarian)
       ),
@@ -11914,11 +11967,11 @@ function SettingAkun({ pushNotif }) {
           React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Gaji kasir / bulan (Rp)"), React.createElement("input", { className: "inp", type:"number", value: form.gaji, onChange: e=>setForm(f=>({...f, gaji:e.target.value})) }))
         ),
         React.createElement("div", { className: "two-col" },
-          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Modal awal buka lapak (Rp)"), React.createElement("input", { className: "inp", type:"number", value: form.modalAwal, onChange: e=>setForm(f=>({...f, modalAwal:e.target.value})) })),
-          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Target laba / bulan (Rp)"), React.createElement("input", { className: "inp", type:"number", value: form.targetLaba, onChange: e=>setForm(f=>({...f, targetLaba:e.target.value})) }))
+          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Modal awal buka lapak (Rp)"), React.createElement("input", { className: "inp", type:"text", inputMode:"numeric", value: fmtRibuan(form.modalAwal), onChange: e=>setForm(f=>({...f, modalAwal:parseRibuan(e.target.value)})) })),
+          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Target laba / bulan (Rp)"), React.createElement("input", { className: "inp", type:"text", inputMode:"numeric", value: fmtRibuan(form.targetLaba), onChange: e=>setForm(f=>({...f, targetLaba:parseRibuan(e.target.value)})) }))
         ),
         React.createElement("div", { className: "two-col" },
-          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Harga jual per donat (Rp)"), React.createElement("input", { className: "inp", type:"number", value: form.hargaJual, onChange: e=>setForm(f=>({...f, hargaJual:e.target.value})) })),
+          React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Harga jual per donat (Rp)"), React.createElement("input", { className: "inp", type:"text", inputMode:"numeric", value: fmtRibuan(form.hargaJual), onChange: e=>setForm(f=>({...f, hargaJual:parseRibuan(e.target.value)})) })),
           React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Modal bahan per donat (Rp)"), React.createElement("input", { className: "inp", type:"number", value: form.modalPerDonat, onChange: e=>setForm(f=>({...f, modalPerDonat:e.target.value})) }))
         ),
         React.createElement("div", { className: "field-group" }, React.createElement("label", null, "Ongkos kirim per donat dari dapur (Rp)"), React.createElement("input", { className: "inp", type:"number", value: form.ongkirPerDonat, onChange: e=>setForm(f=>({...f, ongkirPerDonat:e.target.value})) })),
@@ -12856,12 +12909,11 @@ function SettingAkun({ pushNotif }) {
 
     return React.createElement("div", null,
       confirmModal,
-      React.createElement("h3", { className: "section-title mt8" }, "🧺 Beli bahan — satu pintu"),
-      React.createElement("p", { className: "info-txt" },
+      React.createElement("h3", { className: "section-title mt8" }, "🧺 Beli bahan — satu pintu ", React.createElement(InfoHelp, null,
         "Satu tempat buat semua urusan bahan: lihat stok di dapur, beli bahan (stok otomatis naik), dan catat biaya lain. ",
         React.createElement("strong", null, "Tepung, kentang, telur wajib lewat Beli bahan"),
         ", jangan lewat biaya lain — biar stok tidak bohong."
-      ),
+      )),
 
       React.createElement("div", { className: "kpi-grid mt8" },
         React.createElement("div", { className: "kpi-card" },
@@ -12968,7 +13020,17 @@ function SettingAkun({ pushNotif }) {
             React.createElement("label", null, "Bahan baku"),
             React.createElement("select", {
               className: "inp", value: restok.bahanId,
-              onChange: (e) => setRestok((f) => ({ ...f, bahanId: e.target.value }))
+              onChange: (e) => {
+                const bahanId = e.target.value;
+                setRestok((f) => {
+                  const b = bahan.find((x) => x.id === bahanId);
+                  // Otomatis isi "habis berapa uang" = jumlah bungkus × harga beli bahan ini,
+                  // tapi TETAP BISA diedit manual kalau harga naik/beda dari biasanya.
+                  const nBatch = parseFloat(f.batch || "0");
+                  const autoBayar = (f.modeQty === "batch" && b && nBatch > 0) ? String(Math.round(nBatch * (b.hargaBeli || 0))) : f.jumlahBayar;
+                  return { ...f, bahanId, jumlahBayar: autoBayar };
+                });
+              }
             },
               React.createElement("option", { value: "" }, "-- pilih: kentang, terigu, dll --"),
               bahan.filter((b) => b.active !== false).map((b) => React.createElement("option", { key: b.id, value: b.id },
@@ -12992,7 +13054,16 @@ function SettingAkun({ pushNotif }) {
                 React.createElement("label", null, "Beli berapa bungkus"),
                 React.createElement("input", {
                   className: "inp", type: "number", min: "0", step: "0.01",
-                  value: restok.batch, onChange: (e) => setRestok((f) => ({ ...f, batch: e.target.value }))
+                  value: restok.batch,
+                  onChange: (e) => {
+                    const batch = e.target.value;
+                    setRestok((f) => {
+                      const b = bahan.find((x) => x.id === f.bahanId);
+                      const nBatch = parseFloat(batch || "0");
+                      const autoBayar = (b && nBatch > 0) ? String(Math.round(nBatch * (b.hargaBeli || 0))) : f.jumlahBayar;
+                      return { ...f, batch, jumlahBayar: autoBayar };
+                    });
+                  }
                 }),
                 bRestok && React.createElement("p", { className: "info-txt" },
                   "1 bungkus = ", kapRestok, " donat → total ", qtyPreview, " donat masuk dapur"
@@ -13006,11 +13077,12 @@ function SettingAkun({ pushNotif }) {
                 })
               ),
           React.createElement("div", { className: "field-group" },
-            React.createElement("label", null, "Habis berapa uang (Rp)"),
+            React.createElement("label", null, "Habis berapa uang (Rp)", restok.bahanId && restok.modeQty === "batch" && React.createElement("span", { style: { fontWeight: 400, color: "var(--text2)" } }, " — otomatis, bisa diubah kalau harga beda")),
             React.createElement("input", {
-              className: "inp", type: "number", min: "0",
-              value: restok.jumlahBayar, onChange: (e) => setRestok((f) => ({ ...f, jumlahBayar: e.target.value })),
-              placeholder: "Contoh: 50000"
+              className: "inp", type: "text", inputMode: "numeric",
+              value: fmtRibuan(restok.jumlahBayar),
+              onChange: (e) => setRestok((f) => ({ ...f, jumlahBayar: parseRibuan(e.target.value) })),
+              placeholder: "Contoh: 50.000"
             })
           ),
           React.createElement("div", { className: "field-group" },
@@ -13114,7 +13186,7 @@ function SettingAkun({ pushNotif }) {
           showBiayaForm && React.createElement("div", null,
             React.createElement("div", { className: "field-group" },
               React.createElement("label", null, "Habis berapa (Rp)"),
-              React.createElement("input", { className: "inp", type: "number", value: biayaForm.jumlah, onChange: (e) => setBiayaForm((f) => ({ ...f, jumlah: e.target.value })), placeholder: "20000" })
+              React.createElement("input", { className: "inp", type: "text", inputMode: "numeric", value: fmtRibuan(biayaForm.jumlah), onChange: (e) => setBiayaForm((f) => ({ ...f, jumlah: parseRibuan(e.target.value) })), placeholder: "20.000" })
             ),
             React.createElement("div", { className: "field-group" },
               React.createElement("label", null, "Buat apa"),
@@ -13626,7 +13698,7 @@ function SettingAkun({ pushNotif }) {
         ),
         React.createElement("div", { className: "field-group" },
           React.createElement("label", null, "Jumlah (Rp)"),
-          React.createElement("input", { type: "number", className: "inp", value: form.jumlah, onChange: (e) => setForm((f) => ({ ...f, jumlah: e.target.value })) })
+          React.createElement("input", { type: "text", inputMode: "numeric", className: "inp", value: fmtRibuan(form.jumlah), onChange: (e) => setForm((f) => ({ ...f, jumlah: parseRibuan(e.target.value) })) })
         ),
         React.createElement("button", { className: "btn-primary btn-full", disabled: busy, onClick: tambah }, busy ? "Sedang menyimpan..." : (form.tipe === "setor" ? "Setor ke Dana Cadangan" : "Catat Pemakaian Dana"))
       ),
@@ -13796,6 +13868,7 @@ function SettingAkun({ pushNotif }) {
       tab === "absensi"     && React.createElement(OwnerAbsensi, { pushNotif }),
       tab === "pengeluaran" && React.createElement(PengeluaranOwner, { pushNotif }),
       tab === "produksiCK"  && React.createElement(OwnerProduksiCK, { pushNotif, me }),
+      tab === "kurir"       && React.createElement(DistribusiPage, { pushNotif, me }),
       tab === "gudang"      && React.createElement("div", null,
         React.createElement("div", { className: "info-txt mb8", style: { borderLeft: "4px solid var(--accent)", background: "color-mix(in srgb, var(--accent) 8%, var(--bg2))" } },
           React.createElement("strong", null, "Satu pintu beli bahan. "),
@@ -14398,6 +14471,7 @@ function SettingAkun({ pushNotif }) {
 
     const branches = S.get("branches") || [];
     const menus = S.get("menuVarian") || [];
+    const bahan = S.get("bahanPokok") || [];
     const ckBranch = branches.find((b) => b.type === "central_kitchen");
     const branchId = ckBranch?.id || me?.branchId || "";
     const branchName = ckBranch?.name || "Dapur pusat";
@@ -14405,6 +14479,18 @@ function SettingAkun({ pushNotif }) {
     const historyModeActive = isHistoryModeAllowedForBranch(historyMode, branchId);
     const canChangeDate = historyModeActive;
     const safeDate = canChangeDate ? date : today();
+
+    // Saldo bahan baku di dapur ini — biar pekerja lihat sebelum mulai produksi,
+    // gak nunggu error "stok kurang" pas udah isi form.
+    const saldoBahanMap = (() => {
+      const ledger = (S.get("material_stock_ledger") || []).filter((l) => l.branch_id === branchId);
+      const map = {};
+      for (const l of ledger) {
+        const q = Number(l.quantity) || 0;
+        map[l.bahan_id] = (map[l.bahan_id] || 0) + (l.direction === "in" ? q : -q);
+      }
+      return map;
+    })();
 
     const produksiList = (S.get("produksiCK") || [])
       .filter((p) => p.date === safeDate)
@@ -14578,7 +14664,7 @@ function SettingAkun({ pushNotif }) {
 
     return React.createElement("div", { className: "page" },
       React.createElement("div", { className: "page-header" },
-        React.createElement("div", { className: "page-icon" }, "\uD83C\uDF73"),
+        React.createElement("img", { className: "page-icon", src: getBrandLogo(), style: { width: 45, height: 45, objectFit: "cover", borderRadius: 10 } }),
         React.createElement("div", null,
           React.createElement("h2", null, "Dapur pusat"),
           React.createElement("p", { className: "page-sub" }, branchName, " \u2014 Catat Produksi Harian")
@@ -14603,6 +14689,30 @@ function SettingAkun({ pushNotif }) {
         historyModeActive
           ? "Mode histori aktif untuk Dapur pusat. Pekerja dapur bisa pilih tanggal lain bila owner membukanya."
           : "Tanggal produksi dan absensi CK dikunci ke hari ini. Owner bisa membuka mode histori khusus CK bila diperlukan."
+      ),
+
+      // Info stok bahan baku — biar pekerja lihat dulu sebelum mulai produksi
+      bahan.length > 0 && React.createElement("div", { className: "form-card" },
+        React.createElement("h4", null, "\uD83D\uDCE6 Stok Bahan Baku"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 } },
+          bahan.filter((b) => b.active !== false).map((b) => {
+            const saldo = saldoBahanMap[b.id] || 0;
+            const habis = saldo <= 0;
+            return React.createElement("div", {
+              key: b.id,
+              style: {
+                padding: "8px 10px", borderRadius: 8,
+                background: habis ? "color-mix(in srgb, var(--red) 12%, var(--bg2))" : "var(--bg2)",
+                border: habis ? "1px solid color-mix(in srgb, var(--red) 35%, var(--border))" : "1px solid var(--border)"
+              }
+            },
+              React.createElement("div", { style: { fontSize: 12, color: "var(--text2)" } }, b.nama),
+              React.createElement("div", { style: { fontWeight: 700, color: habis ? "var(--red)" : "var(--text)" } },
+                Math.max(saldo, 0), " ", b.satuanStok || "", habis ? " — Habis" : ""
+              )
+            );
+          })
+        )
       ),
 
       // Form input produksi
