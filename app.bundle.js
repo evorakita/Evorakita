@@ -4930,13 +4930,11 @@ function useConfirm() {
           p_note: "Distribusi dari produksi " + p.id
         });
         if (transferError) throw transferError;
-        // Legacy projection sementara untuk tampilan lama; sumber stok resmi adalah stock_transfers.
-        const rows = entries.map((e) => {
-          const branch = branches.find((b) => b.id === e.branchId);
-          return { id: uid(), date: p.date, ts: tsForDate(p.date), produksiId: p.id, transferId, menuId: p.menuId, menuNama: p.menuNama, totalProduksi: p.jumlah, branchId: e.branchId, branchName: branch?.name || e.branchId, jumlahKirim: e.jumlah, hppPerPcs: hppPerPcsDistrib, hppTotal: hppPerPcsDistrib * e.jumlah, status: "pending" };
-        });
-        const { error } = await sb.from("distribusiCK").insert(rows);
-        if (error) throw error;
+        // Sumber data resmi = stock_transfers/stock_transfer_lines (RPC di atas).
+        // JANGAN insert manual ke distribusiCK lagi — itu bikin data DOBEL,
+        // karena syncNormalizedOperationalState sudah otomatis bikin proyeksi
+        // tampilan dari stock_transfer_lines.
+        await syncNormalizedOperationalState().catch(() => {});
         await S.loadKey("distribusiCK");
         setDistribForm((f) => { const c = { ...f }; delete c[p.id]; return c; });
         pushNotif("Distribusi berhasil dikirim ke " + entries.length + " cabang!", "success");
@@ -5009,11 +5007,37 @@ function useConfirm() {
           danger: true,
           confirmLabel: "Hapus Semua",
           onConfirm: async () => {
-            const idsToDelete = new Set(pending.map((d) => d.id));
-            S.set("distribusiCK", (S.get("distribusiCK") || []).filter((x) => !idsToDelete.has(x.id)));
-            try { await batalkanPemakaianProduksi(p.id); } catch (e) { pushNotif("Stok gudang gagal diretur: " + (e?.message || e), "warning"); }
-            S.set("produksiCK", (S.get("produksiCK") || []).filter((x) => x.id !== p.id));
-            pushNotif(`Produksi & ${pending.length} distribusi pending-nya berhasil dihapus.`, "warning");
+            try {
+              // 1) Batalkan setiap distribusi pending dulu — deteksi sistem lama
+              // vs baru per baris, supaya BENERAN kehapus di database (bukan
+              // cuma optimis di layar) dan stok donat jadi ikut balik.
+              for (const d of pending) {
+                if (d.lineId) {
+                  const { data: rpcData, error: rpcErr } = await sb.rpc("void_stock_transfer_line", { p_line_id: d.lineId, p_reason: "Dihapus bareng produksi (input keliru)" });
+                  if (rpcErr || !rpcData?.ok) throw new Error(rpcData?.message || rpcErr?.message || `Gagal batalkan distribusi ke ${d.branchName}.`);
+                } else {
+                  const { error } = await sb.from("distribusiCK").delete().eq("id", d.id);
+                  if (error) throw error;
+                }
+              }
+              await syncNormalizedOperationalState().catch(() => {});
+              await S.loadKey("distribusiCK");
+
+              // 2) Baru hapus produksinya — deteksi sistem lama vs baru juga.
+              const { data: legacyRow } = await sb.from("produksiCK").select("id").eq("id", p.id).maybeSingle();
+              if (legacyRow) {
+                try { await batalkanPemakaianProduksi(p.id); } catch (e) { pushNotif("Stok gudang gagal diretur: " + (e?.message || e), "warning"); }
+                S.set("produksiCK", (S.get("produksiCK") || []).filter((x) => x.id !== p.id));
+              } else {
+                const { data: rpcData2, error: rpcErr2 } = await sb.rpc("void_production_batch", { p_batch_id: p.id, p_reason: "Dihapus bareng distribusi pending (input keliru)" });
+                if (rpcErr2 || !rpcData2?.ok) throw new Error(rpcData2?.message || rpcErr2?.message || "Gagal menghapus produksi.");
+                await syncNormalizedOperationalState().catch(() => {});
+                await S.loadKey("produksiCK");
+              }
+              pushNotif(`Produksi & ${pending.length} distribusi pending-nya berhasil dihapus.`, "warning");
+            } catch (e) {
+              pushNotif("Gagal menghapus: " + (e?.message || String(e)) + " — sebagian mungkin sudah terhapus, muat ulang halaman untuk lihat kondisi terkini.", "warning");
+            }
           },
         });
         return;
@@ -8426,7 +8450,7 @@ function useConfirm() {
       }
     }, [initialSub]);
     const [bahan, setBahan] = useState(() => S.get("bahanPokok") || []);
-    const [menus, setMenus] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe !== "paket" && m.active !== false));
+    const [menus, setMenus] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe !== "paket"));
     const [topings, setTopings] = useState(() => S.get("topingTambahan") || []);
     const [editMenu, setEditMenu] = useState(null);
     const [confirmAsk, confirmModal] = useConfirm();
@@ -8548,22 +8572,9 @@ function useConfirm() {
     };
 
     const delMenu = async (id) => {
-      const { error } = await sb.from("menuVarian").delete().eq("id", id);
-      if (error) {
-        if (error.code === "23503") {
-          const { error: archErr } = await sb.from("menuVarian").update({ active: false }).eq("id", id);
-          if (archErr) { pushNotif("Gagal: " + archErr.message, "warning"); return; }
-          const u = (S.get("menuVarian") || []).map((x) => x.id === id ? { ...x, active: false } : x);
-          S.setLocal("menuVarian", u); setMenus(u.filter((x) => x.tipe !== "paket" && x.active !== false));
-          pushNotif("Menu ini masih dipakai sebagai menu dasar box lain, jadi diARSIPKAN (bukan dihapus permanen) — box yang pakai menu ini tetap aman.", "warning");
-          return;
-        }
-        pushNotif("Gagal menghapus menu: " + error.message, "warning");
-        return;
-      }
       const u = (S.get("menuVarian") || []).filter((x) => x.id !== id);
-      S.setLocal("menuVarian", u); setMenus(u.filter((x) => x.tipe !== "paket"));
-      pushNotif("Menu dihapus permanen.", "warning");
+      S.set("menuVarian", u); setMenus(u.filter((x) => x.tipe !== "paket"));
+      pushNotif("Menu dihapus.", "warning");
     };
     const askDelMenu = (m) => confirmAsk({ title: "Hapus Menu", message: `Yakin hapus menu ${m.nama}?`, onConfirm: () => delMenu(m.id) });
 
@@ -8983,7 +8994,7 @@ function useConfirm() {
   // ─── SettingPaket ──────────────────────────────────────────────────────────
   function SettingPaket({ pushNotif }) {
     const tick = useStoreTick();
-    const [pakets, setPakets] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe === "paket" && m.active !== false));
+    const [pakets, setPakets] = useState(() => (S.get("menuVarian") || []).filter((m) => m.tipe === "paket"));
     const [bahan] = useState(() => S.get("bahanPokok") || []);
     const [editP, setEditP] = useState(null);
     const [confirmAsk, confirmModal] = useConfirm();
@@ -8998,22 +9009,9 @@ function useConfirm() {
     };
 
     const del = async (id) => {
-      const { error } = await sb.from("menuVarian").delete().eq("id", id);
-      if (error) {
-        if (error.code === "23503") {
-          const { error: archErr } = await sb.from("menuVarian").update({ active: false }).eq("id", id);
-          if (archErr) { pushNotif("Gagal: " + archErr.message, "warning"); return; }
-          const u = (S.get("menuVarian") || []).map((x) => x.id === id ? { ...x, active: false } : x);
-          S.setLocal("menuVarian", u); setPakets(u.filter((x) => x.tipe === "paket" && x.active !== false));
-          pushNotif("Box ini masih dipakai/dirujuk menu lain, jadi diARSIPKAN (bukan dihapus permanen).", "warning");
-          return;
-        }
-        pushNotif("Gagal menghapus box: " + error.message, "warning");
-        return;
-      }
       const u = (S.get("menuVarian") || []).filter((x) => x.id !== id);
-      S.setLocal("menuVarian", u); setPakets(u.filter((x) => x.tipe === "paket"));
-      pushNotif("Box dihapus permanen.", "warning");
+      S.set("menuVarian", u); setPakets(u.filter((x) => x.tipe === "paket"));
+      pushNotif("Box dihapus.", "warning");
     };
     const askDel = (p) => confirmAsk({ title: "Hapus Box", message: `Yakin hapus box "${p.nama}"?`, onConfirm: () => del(p.id) });
 
